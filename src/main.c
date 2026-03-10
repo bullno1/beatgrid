@@ -18,7 +18,9 @@ init(int argc, const char** argv) {
 		BLOG_INFO("Creating app");
 		int options =
 			  CF_APP_OPTIONS_WINDOW_POS_CENTERED_BIT
-			| CF_APP_OPTIONS_FILE_SYSTEM_DONT_DEFAULT_MOUNT_BIT;
+			| CF_APP_OPTIONS_FILE_SYSTEM_DONT_DEFAULT_MOUNT_BIT
+			| CF_APP_OPTIONS_RESIZABLE_BIT
+			;
 		CF_Result result = cf_make_app(WINDOW_TITLE, 0, 0, 0, 1280, 720, options, argv[0]);
 		if (result.code != CF_RESULT_SUCCESS) {
 			BLOG_FATAL("Could not create app: %s", result.details);

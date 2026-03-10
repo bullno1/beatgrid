@@ -26,9 +26,14 @@ bg_grid_cleanup(bg_grid_t* grid) {
 }
 
 static inline void
+bg_grid_del(bg_grid_t* grid, bg_pos_t pos) {
+	bhash_remove(grid, pos);
+}
+
+static inline void
 bg_grid_put(bg_grid_t* grid, bg_pos_t pos, bg_sym_t sym) {
 	if (sym == ' ') {
-		bhash_remove(grid, pos);
+		bg_grid_del(grid, pos);
 	} else {
 		bhash_put(grid, pos, sym);
 	}

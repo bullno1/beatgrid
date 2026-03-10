@@ -29,7 +29,7 @@ init(int argc, const char** argv) {
 		app_created = true;
 	}
 
-	cf_set_fixed_timestep(10);
+	cf_set_fixed_timestep(60);
 	cf_app_set_vsync(true);
 	cf_app_set_title(WINDOW_TITLE);
 

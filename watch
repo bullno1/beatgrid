@@ -1,0 +1,12 @@
+#!/bin/sh -e
+
+./build || true
+
+inotifywait -r -e CLOSE_WRITE -m src deps | \
+    while read path action file
+	do
+		clear
+		echo "Rebuilding"
+		./build || true
+		echo "Done"
+    done

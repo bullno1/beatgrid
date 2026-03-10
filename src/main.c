@@ -8,7 +8,7 @@
 #include <bent.h>
 #endif
 
-static const char* WINDOW_TITLE = "gridbeat";
+static const char* WINDOW_TITLE = "beatgrid";
 BGAME_VAR(bool, app_created) = false;
 
 static void
@@ -40,6 +40,18 @@ init(int argc, const char** argv) {
 }
 
 static void
+update(void) {
+	if (cf_app_was_resized()) {
+		int width = cf_app_get_width();
+		int height = cf_app_get_height();
+		cf_app_set_canvas_size(width, height);
+		cf_draw_projection(cf_ortho_2d(0, 0, (float)width, (float)height));
+	}
+
+	bgame_scene_update();
+}
+
+static void
 cleanup(void) {
 	bgame_clear_scene_stack();
 	cf_destroy_app();
@@ -48,7 +60,7 @@ cleanup(void) {
 static bgame_app_t app = {
 	.init = init,
 	.cleanup = cleanup,
-	.update = bgame_scene_update,
+	.update = update,
 	.before_reload = bgame_scene_before_reload,
 	.after_reload = bgame_scene_after_reload,
 };

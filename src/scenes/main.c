@@ -14,9 +14,9 @@ static float MOUSE_THRESHOLD = 0.001f;
 
 #define SCENE_VAR(TYPE, NAME) BGAME_PRIVATE_VAR(main, TYPE, NAME)
 
-SCENE_VAR(gb_pos_t, cursor_pos)
+SCENE_VAR(bg_pos_t, cursor_pos)
 SCENE_VAR(CF_V2, cursor_smooth_pos)
-SCENE_VAR(gb_grid_t, grid)
+SCENE_VAR(bg_grid_t, grid)
 
 SCENE_VAR(CF_ButtonBinding, cursor_up)
 SCENE_VAR(CF_ButtonBinding, cursor_down)
@@ -45,7 +45,7 @@ static void
 init(void) {
 	cf_clear_color(0.0f, 0.0f, 0.0f, 0.0f);
 
-	gb_grid_reinit(&grid, scene_allocator);
+	bg_grid_reinit(&grid, scene_allocator);
 
 	if (cursor_up.id != 0) {
 		cf_destroy_button_binding(cursor_up);
@@ -72,7 +72,7 @@ init(void) {
 
 static void
 cleanup(void) {
-	gb_grid_cleanup(&grid);
+	bg_grid_cleanup(&grid);
 
 	cf_destroy_button_binding(cursor_up);
 	cf_destroy_button_binding(cursor_down);

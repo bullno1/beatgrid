@@ -10,3 +10,6 @@
 [submodule "deps/bgame"]
 	path = deps/bgame
 	url = https://github.com/bullno1/bgame.git
+[submodule "deps/nanbox"]
+	path = deps/nanbox
+	url = https://github.com/zuiderkwast/nanbox.git

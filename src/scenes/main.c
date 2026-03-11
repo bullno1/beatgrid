@@ -18,6 +18,9 @@ static float MOUSE_THRESHOLD = 0.001f;
 SCENE_VAR(bg_pos_t, cursor_pos)
 SCENE_VAR(CF_V2, cursor_smooth_pos)
 SCENE_VAR(bg_grid_t, grid)
+SCENE_VAR(bg_operator_registry_t, operator_registry)
+SCENE_VAR(bg_pipeline_t*, pipeline)
+SCENE_VAR(bg_eval_ctx_t*, eval_ctx)
 
 SCENE_VAR(CF_ButtonBinding, btn_cursor_up)
 SCENE_VAR(CF_ButtonBinding, btn_cursor_down)
@@ -48,8 +51,20 @@ init(void) {
 	cf_clear_color(0.0f, 0.0f, 0.0f, 0.0f);
 
 	bg_grid_reinit(&grid, scene_allocator);
+	bg_operator_registry_reinit(&operator_registry, scene_allocator);
 
-	if (btn_cursor_up.id != 0) {
+	bg_pipeline_reinit(&pipeline, scene_allocator);
+	bg_pipeline_build(pipeline, &grid);
+
+	if (bgame_current_scene_state() == BGAME_SCENE_REINITIALIZING) {
+		bg_pipeline_end_eval(eval_ctx);
+	}
+
+	eval_ctx = bg_pipeline_begin_eval(pipeline, (bg_grid_params_t){
+		.bpm = 120,
+	});
+
+	if (bgame_current_scene_state() == BGAME_SCENE_REINITIALIZING) {
 		cf_destroy_button_binding(btn_cursor_up);
 		cf_destroy_button_binding(btn_cursor_down);
 		cf_destroy_button_binding(btn_cursor_left);
@@ -81,6 +96,9 @@ init(void) {
 
 static void
 cleanup(void) {
+	bg_pipeline_end_eval(eval_ctx);
+	bg_pipeline_cleanup(&pipeline);
+	bg_operator_registry_cleanup(&operator_registry);
 	bg_grid_cleanup(&grid);
 
 	cf_destroy_button_binding(btn_cursor_up);
@@ -88,12 +106,6 @@ cleanup(void) {
 	cf_destroy_button_binding(btn_cursor_left);
 	cf_destroy_button_binding(btn_cursor_right);
 	cf_destroy_button_binding(btn_del_sym);
-
-	btn_cursor_up.id = 0;
-	btn_cursor_down.id = 0;
-	btn_cursor_left.id = 0;
-	btn_cursor_right.id = 0;
-	btn_del_sym.id = 0;
 
 	cf_input_disable_ime();
 }
@@ -113,6 +125,7 @@ update(void) {
 
 // Input {{{
 
+// Cursor {{{
 	if (
 		cf_button_binding_consume_press(btn_cursor_up)
 		||
@@ -145,10 +158,6 @@ update(void) {
 		cursor_pos.x += 1;
 	}
 
-	if (cf_button_binding_consume_press(btn_del_sym)) {
-		bg_grid_del(&grid, cursor_pos);
-	}
-
 	if (
 		cf_abs(cf_mouse_motion_x()) > MOUSE_THRESHOLD
 		||
@@ -159,6 +168,15 @@ update(void) {
 		cursor_pos.x = cf_round(p.x);
 		cursor_pos.y = cf_round(p.y);
 	}
+// }}}
+
+// Edit {{{
+	bool modified = false;
+
+	if (cf_button_binding_consume_press(btn_del_sym)) {
+		bg_grid_del(&grid, cursor_pos);
+		modified = true;
+	}
 
 	if (cf_input_text_has_data()) {
 		int codepoint = cf_input_text_pop_utf32();
@@ -166,14 +184,31 @@ update(void) {
 
 		if (codepoint >= 32 && codepoint <= 126 && codepoint != ' ') {
 			bg_grid_put(&grid, cursor_pos, (bg_sym_t)codepoint);
+			modified = true;
 		}
 	}
+
+	if (modified) {
+		bg_pipeline_end_eval(eval_ctx);
+		bg_pipeline_build(pipeline, &grid);
+		eval_ctx = bg_pipeline_begin_eval(pipeline, (bg_grid_params_t){
+			.bpm = 120,
+		});
+	}
+// }}}
 
 // }}}
 
 // Grid render {{{
 
 	// Symbols
+	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
+		bg_pos_t pos = grid.keys[i];
+
+		bg_operator_t* op = bg_operator_registry_lookup(&operator_registry, grid.values[i]);
+		if (op == NULL) { continue; }
+	}
+
 	cf_push_text_effect_active(false);
 	cf_push_font_size(GRID_SIZE);
 	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
@@ -202,11 +237,27 @@ update(void) {
 			(1 - cf_exp(- CURSOR_MOVE_SPEED * CF_DELTA_TIME))
 		)
 	);
-	CF_Aabb cursor = cf_make_aabb_pos_w_h(
+	CF_Aabb cursor_box = cf_make_aabb_pos_w_h(
 		cursor_smooth_pos,
 		GRID_SIZE, GRID_SIZE
 	);
-	cf_draw_box_rounded(cursor, 0.5f, 1.2f);
+	cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
+
+	// I/O lines
+	int num_edges = bg_pipeline_count_edges(eval_ctx);
+	const bg_edge_t* edges = bg_pipeline_get_edges(eval_ctx);
+	for (int i = 0; i < num_edges; ++i) {
+		CF_V2 from_pos = grid_pos_to_world(edges[i].from);
+		CF_V2 to_pos   = grid_pos_to_world(edges[i].to);
+
+		if (
+			cf_contains_point(cursor_box, from_pos)
+			||
+			cf_contains_point(cursor_box, to_pos)
+		) {
+			cf_draw_line(from_pos, to_pos, 0.5f);
+		}
+	}
 
 // }}}
 

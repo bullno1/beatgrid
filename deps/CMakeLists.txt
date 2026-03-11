@@ -24,3 +24,7 @@ target_include_directories(remodule INTERFACE remodule)
 # --- blibs --
 add_library(blibs INTERFACE)
 target_include_directories(blibs INTERFACE blibs)
+
+# --- nanbox ---
+add_library(nanbox INTERFACE)
+target_include_directories(nanbox INTERFACE nanbox)

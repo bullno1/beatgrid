@@ -1,0 +1,54 @@
+A: ADSR
+B: Beat
+C
+D: Delay
+E: East
+F: FM
+G:
+H
+I: Input
+J:
+K:
+L:
+M: Midi frequency
+N: North
+O: Output
+P:
+Q:
+R: Random
+S: South
+T: Ternary
+U:
+V: Mix
+W: West
+X: Scatter
+Y: Gather
+Z: Sawtooth
+~: Sine wave
+`:
+!: Set
+@:
+#: Note scale
+$: Gather count
+%: Mod
+^: Triangle
+&: And
+*: Multiply
+_: LPF
+=: Equal
++: Plus
+-: Minus
+/: Divide
+>: Greater than
+<: Less than
+|: Or
+\:
+[]: Indexed lookup
+(): Sequence
+{}: Loop
+::
+;:
+.: BSF
+?: Get
+":
+':

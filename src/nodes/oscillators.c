@@ -18,6 +18,7 @@ sine_eval(bg_node_ctx_t* ctx) {
 		.pos = { .x = pos.x - 1, .y = pos.y },
 		.name = "freq",
 		.description = "Frequency of the wave",
+		.default_value = 440.f,  // TODO: Derive from tuning frequency
 	});
 	bg_output_handle_t output = bg_node_get_output(ctx, (bg_output_desc_t){
 		.pos = { .x = pos.x, .y = pos.y - 1 },

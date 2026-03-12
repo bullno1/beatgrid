@@ -192,7 +192,9 @@ cleanup(void) {
 
 static void
 before_reload(void) {
-	SDL_SetAudioStreamPutCallback(audio_stream, NULL, NULL);
+	SDL_SetAudioStreamGetCallback(audio_stream, NULL, NULL);
+	SDL_LockAudioStream(audio_stream);
+	SDL_UnlockAudioStream(audio_stream);
 }
 
 static void
@@ -200,13 +202,15 @@ after_reload(void) {
 	bg_pipeline_reinit(&audio_cmd_buf[0].pipeline, scene_allocator);
 	bg_pipeline_reinit(&audio_cmd_buf[1].pipeline, scene_allocator);
 	bg_pipeline_reinit(&audio_cmd_buf[2].pipeline, scene_allocator);
+
+	bg_pipeline_build(playing_pipeline, &node_registry, &grid);
 	bg_pipeline_set_params(playing_pipeline, (bg_pipeline_params_t){
 		.dt = 1.f / 48000.f,
 		.num_outputs = CF_ARRAY_SIZE(audio_outputs),
 		.outputs = audio_outputs,
 	});
 
-	SDL_SetAudioStreamPutCallback(audio_stream, audio_callback, NULL);
+	SDL_SetAudioStreamGetCallback(audio_stream, audio_callback, NULL);
 }
 
 static void

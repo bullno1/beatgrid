@@ -179,7 +179,14 @@ void
 bg_node_set_output_value(
 	bg_node_ctx_t* ctx,
 	bg_output_handle_t output,
-	bg_signal_t vaue
+	bg_signal_t value
+);
+
+void
+bg_node_push_pipeline_output(
+	bg_node_ctx_t* ctx,
+	int channel,
+	bg_signal_t value
 );
 
 static bool

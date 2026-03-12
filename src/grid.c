@@ -1,5 +1,6 @@
 #include "grid.h"
 #include <blog.h>
+#include <barray.h>
 
 typedef struct {
 	void* userdata;
@@ -28,6 +29,7 @@ struct bg_pipeline_s {
 	BHASH_TABLE(bg_pos_t, bg_signal_t) values;
 	BHASH_TABLE(bg_edge_t, bg_edge_data_t) edges;
 	BHASH_TABLE(bg_pos_t, bg_pull_arc_t) pull_arcs;
+	barray(bg_pos_t) pull_nodes;
 };
 
 struct bg_node_ctx_s {
@@ -98,12 +100,12 @@ bg_pipeline_reinit(bg_pipeline_t** pipeline_ptr, bgame_allocator_t* allocator) {
 	hconfig.memctx = allocator;
 
 	bhash_reinit(&pipeline->nodes, hconfig);
+	bhash_reinit(&pipeline->pull_arcs, hconfig);
 
 	hconfig.removable = false;
 	bhash_reinit(&pipeline->consts, hconfig);
 	bhash_reinit(&pipeline->values, hconfig);
 	bhash_reinit(&pipeline->edges, hconfig);
-	bhash_reinit(&pipeline->pull_arcs, hconfig);
 }
 
 void
@@ -115,6 +117,7 @@ bg_pipeline_cleanup(bg_pipeline_t** pipeline_ptr) {
 	bhash_cleanup(&pipeline->values);
 	bhash_cleanup(&pipeline->edges);
 	bhash_cleanup(&pipeline->pull_arcs);
+	barray_free(pipeline->pull_nodes, pipeline->allocator);
 	bgame_free(pipeline, pipeline->allocator);
 
 	*pipeline_ptr = NULL;
@@ -132,6 +135,7 @@ bg_pipeline_build(
 	const bg_grid_t* grid
 ) {
 	bhash_clear(&pipeline->consts);
+	barray_clear(pipeline->pull_nodes);
 	int version = ++pipeline->version;
 
 	// Build pipeline from the grid
@@ -187,6 +191,10 @@ bg_pipeline_build(
 					.node_data = node_data,
 				};
 				node_data->node->eval(&ctx);
+			}
+
+			if (node->pull) {
+				barray_push(pipeline->pull_nodes, pos, pipeline->allocator);
 			}
 		}
 	}
@@ -322,10 +330,9 @@ bg_node_get_input(bg_node_ctx_t* ctx, bg_input_desc_t desc) {
 	return value != NULL ? *value : desc.default_value;
 }
 
+
 bg_output_handle_t
 bg_node_get_output(bg_node_ctx_t* ctx, bg_output_desc_t desc) {
-	bhash_alloc_result_t alloc_result = bhash_alloc(&ctx->pipeline->values, desc.pos);
-
 	if (ctx->phase == BG_EVAL_PROBE) {
 		bg_edge_t edge = {
 			.from = desc.pos,
@@ -337,21 +344,28 @@ bg_node_get_output(bg_node_ctx_t* ctx, bg_output_desc_t desc) {
 		};
 		edge_data.desc.input.input_found = NULL;
 		bhash_put(&ctx->pipeline->edges, edge, edge_data);
-	}
 
-	if (alloc_result.is_new) {
-		bg_pull_arc_t pull_arc = {
-			.pos = ctx->pos,
-			.node_data = ctx->node_data,
-		};
-		bhash_put(&ctx->pipeline->pull_arcs, desc.pos, pull_arc);
+		bhash_alloc_result_t alloc_result = bhash_alloc(&ctx->pipeline->pull_arcs, desc.pos);
+		if (alloc_result.is_new) {
+			ctx->pipeline->pull_arcs.keys[alloc_result.index] = desc.pos;
+			ctx->pipeline->pull_arcs.values[alloc_result.index] = (bg_pull_arc_t){
+				.pos = ctx->pos,
+				.node_data = ctx->node_data,
+			};
+
+			return (bg_output_handle_t){
+				.enabled = true,
+				.pos = desc.pos,
+			};
+		} else {
+			// TODO: highlight conflicting outputs (2 nodes writes to the same cell)
+			return (bg_output_handle_t){ .enabled = false };
+		}
+	} else {
 		return (bg_output_handle_t){
 			.enabled = true,
 			.pos = desc.pos,
 		};
-	} else {
-		// TODO: highlight conflicting outputs (2 nodes writes to the same cell)
-		return (bg_output_handle_t){ .enabled = false };
 	}
 }
 
@@ -379,24 +393,57 @@ bg_pipeline_get_edge_data(bg_pipeline_t* pipeline) {
 
 void
 bg_pipeline_process(bg_pipeline_t* pipeline) {
-	// Always write constants
+	// Reset output
+	for (int i = 0; i < pipeline->params.num_outputs; ++i) {
+		pipeline->params.outputs[i].count = 0;
+		pipeline->params.outputs[i].value = 0.f;
+	}
+
+	// Reset grid
+	bhash_clear(&pipeline->values);
 	for (bhash_index_t i = 0; i < bhash_len(&pipeline->consts); ++i) {
 		bhash_put(&pipeline->values, pipeline->consts.keys[i], pipeline->consts.values[i]);
 	}
 
 	// Prepare pull arcs
 	bhash_clear(&pipeline->pull_arcs);
-	for (bhash_index_t i = 0; i < bhash_len(&pipeline->nodes); ++i) {
-		bg_pos_t pos = pipeline->nodes.keys[i];
-		bg_node_data_t* node_data = &pipeline->nodes.values[i];
+	for (int probe_count = 0; probe_count < 2 ; ++probe_count) {
+		for (bhash_index_t i = 0; i < bhash_len(&pipeline->nodes); ++i) {
+			bg_pos_t pos = pipeline->nodes.keys[i];
+			bg_node_data_t* node_data = &pipeline->nodes.values[i];
+			bg_node_ctx_t ctx = {
+				.phase = BG_EVAL_PROBE,
+				.pipeline = pipeline,
+				.pos = pos,
+				.node_data = node_data,
+			};
+			node_data->node->eval(&ctx);
+		}
+	}
+
+	// Evaluate from pull nodes
+	BARRAY_FOREACH_VALUE(pos, pipeline->pull_nodes) {
+		bg_node_data_t* node_data = bhash_get_value(&pipeline->nodes, pos);
+		if (node_data == NULL) { continue; }  // Should not be possible
+
 		bg_node_ctx_t ctx = {
-			.phase = BG_EVAL_PROBE,
+			.phase = BG_EVAL_PROCESS,
 			.pipeline = pipeline,
 			.pos = pos,
 			.node_data = node_data,
 		};
 		node_data->node->eval(&ctx);
 	}
+}
 
-	// Evaluate from pull nodes
+void
+bg_node_push_pipeline_output(
+	bg_node_ctx_t* ctx,
+	int channel,
+	bg_signal_t value
+) {
+	if (0 <= channel && channel < ctx->pipeline->params.num_outputs) {
+		ctx->pipeline->params.outputs[channel].count += 1;
+		ctx->pipeline->params.outputs[channel].value += value;
+	}
 }

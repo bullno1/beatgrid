@@ -9,7 +9,7 @@
 static float GRID_SIZE = 24.f;
 static float KEY_DELAY = 0.1f;
 static float KEY_REPEAT = 0.1f;
-static float KEY_BUFFER = 0.05f;
+static float KEY_BUFFER = 0.00f;
 static float CURSOR_MOVE_SPEED = 30.f;
 static float MOUSE_THRESHOLD = 0.001f;
 
@@ -18,9 +18,9 @@ static float MOUSE_THRESHOLD = 0.001f;
 SCENE_VAR(bg_pos_t, cursor_pos)
 SCENE_VAR(CF_V2, cursor_smooth_pos)
 SCENE_VAR(bg_grid_t, grid)
-SCENE_VAR(bg_operator_registry_t, operator_registry)
+SCENE_VAR(bg_node_registry_t, node_registry)
 SCENE_VAR(bg_pipeline_t*, pipeline)
-SCENE_VAR(bg_eval_ctx_t*, eval_ctx)
+SCENE_VAR(bg_pipeline_params_t, pipeline_params)
 
 SCENE_VAR(CF_ButtonBinding, btn_cursor_up)
 SCENE_VAR(CF_ButtonBinding, btn_cursor_down)
@@ -50,19 +50,15 @@ static void
 init(void) {
 	cf_clear_color(0.0f, 0.0f, 0.0f, 0.0f);
 
-	bg_grid_reinit(&grid, scene_allocator);
-	bg_operator_registry_reinit(&operator_registry, scene_allocator);
-
-	bg_pipeline_reinit(&pipeline, scene_allocator);
-	bg_pipeline_build(pipeline, &grid);
-
-	if (bgame_current_scene_state() == BGAME_SCENE_REINITIALIZING) {
-		bg_pipeline_end_eval(eval_ctx);
+	if (bgame_current_scene_state() == BGAME_SCENE_INITIALIZING) {
 	}
 
-	eval_ctx = bg_pipeline_begin_eval(pipeline, (bg_grid_params_t){
-		.bpm = 120,
-	});
+	bg_grid_reinit(&grid, scene_allocator);
+	bg_node_registry_reinit(&node_registry, scene_allocator);
+
+	bg_pipeline_reinit(&pipeline, scene_allocator);
+	bg_pipeline_set_params(pipeline, pipeline_params);
+	bg_pipeline_build(pipeline, &node_registry, &grid);
 
 	if (bgame_current_scene_state() == BGAME_SCENE_REINITIALIZING) {
 		cf_destroy_button_binding(btn_cursor_up);
@@ -96,9 +92,8 @@ init(void) {
 
 static void
 cleanup(void) {
-	bg_pipeline_end_eval(eval_ctx);
 	bg_pipeline_cleanup(&pipeline);
-	bg_operator_registry_cleanup(&operator_registry);
+	bg_node_registry_cleanup(&node_registry);
 	bg_grid_cleanup(&grid);
 
 	cf_destroy_button_binding(btn_cursor_up);
@@ -171,11 +166,11 @@ update(void) {
 // }}}
 
 // Edit {{{
-	bool modified = false;
+	bool grid_modified = false;
 
 	if (cf_button_binding_consume_press(btn_del_sym)) {
 		bg_grid_del(&grid, cursor_pos);
-		modified = true;
+		grid_modified = true;
 	}
 
 	if (cf_input_text_has_data()) {
@@ -184,16 +179,12 @@ update(void) {
 
 		if (codepoint >= 32 && codepoint <= 126 && codepoint != ' ') {
 			bg_grid_put(&grid, cursor_pos, (bg_sym_t)codepoint);
-			modified = true;
+			grid_modified = true;
 		}
 	}
 
-	if (modified) {
-		bg_pipeline_end_eval(eval_ctx);
-		bg_pipeline_build(pipeline, &grid);
-		eval_ctx = bg_pipeline_begin_eval(pipeline, (bg_grid_params_t){
-			.bpm = 120,
-		});
+	if (grid_modified) {
+		bg_pipeline_build(pipeline, &node_registry, &grid);
 	}
 // }}}
 
@@ -205,8 +196,8 @@ update(void) {
 	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
 		bg_pos_t pos = grid.keys[i];
 
-		bg_operator_t* op = bg_operator_registry_lookup(&operator_registry, grid.values[i]);
-		if (op == NULL) { continue; }
+		const bg_node_t* node = bg_node_registry_lookup(&node_registry, grid.values[i]);
+		if (node == NULL) { continue; }
 	}
 
 	cf_push_text_effect_active(false);
@@ -244,8 +235,8 @@ update(void) {
 	cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
 
 	// I/O lines
-	int num_edges = bg_pipeline_count_edges(eval_ctx);
-	const bg_edge_t* edges = bg_pipeline_get_edges(eval_ctx);
+	int num_edges = bg_pipeline_count_edges(pipeline);
+	const bg_edge_t* edges = bg_pipeline_get_edges(pipeline);
 	for (int i = 0; i < num_edges; ++i) {
 		CF_V2 from_pos = grid_pos_to_world(edges[i].from);
 		CF_V2 to_pos   = grid_pos_to_world(edges[i].to);

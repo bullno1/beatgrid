@@ -1,90 +1,402 @@
 #include "grid.h"
 #include <blog.h>
-#include <nanbox.h>
-#include <math.h>
 
-AUTOLIST_DEFINE(bg_operators)
+typedef struct {
+	void* userdata;
+	const bg_node_t* node;
+	int version;
+	bg_sym_t symbol;
+} bg_node_data_t;
+
+typedef struct {
+	bg_pos_t pos;
+	bg_signal_t value;
+} bg_const_t;
+
+typedef struct {
+	bg_pos_t pos;
+	bg_node_data_t* node_data;
+} bg_pull_arc_t;
+
+struct bg_pipeline_s {
+	bgame_allocator_t* allocator;
+	bg_pipeline_params_t params;
+	int version;
+
+	BHASH_TABLE(bg_pos_t, bg_node_data_t) nodes;
+	BHASH_TABLE(bg_pos_t, bg_signal_t) consts;
+	BHASH_TABLE(bg_pos_t, bg_signal_t) values;
+	BHASH_TABLE(bg_edge_t, bg_edge_data_t) edges;
+	BHASH_TABLE(bg_pos_t, bg_pull_arc_t) pull_arcs;
+};
+
+struct bg_node_ctx_s {
+	bg_eval_phase_t phase;
+	bg_pipeline_t* pipeline;
+	bg_node_data_t* node_data;
+	bg_pos_t pos;
+};
+
+AUTOLIST_DEFINE(bg_nodes)
+
+static int
+bg_decode_base36(char c) {
+    if ('0' <= c && c <= '9') {
+		return c - '0';
+	} else if ('a' <= c && c <= 'z') {
+		return c - 'a' + 10;
+	} else {
+		return -1;  // Invalid
+	}
+}
 
 void
-bg_operator_registry_reinit(bg_operator_registry_t* reg, bgame_allocator_t* allocator) {
+bg_node_registry_reinit(bg_node_registry_t* reg, bgame_allocator_t* allocator) {
 	bhash_config_t hconfig = bhash_config_default();
 	hconfig.memctx = allocator;
 	hconfig.removable = false;
 	bhash_reinit(reg, hconfig);
 	bhash_clear(reg);
 
-	AUTOLIST_FOREACH(itr, bg_operators) {
-		bg_operator_t* op = itr->value_addr;
+	AUTOLIST_FOREACH(itr, bg_nodes) {
+		const bg_node_t* op = itr->value_addr;
+		bg_sym_t symbol = op->symbol;
 
-		if (bhash_has(reg, op->symbol)) {
+		if (bhash_has(reg, symbol)) {
 			BLOG_WARN("Symbol %c is already registered", op->symbol);
 		}
 
-		bhash_put(reg, op->symbol, op);
+		bhash_put(reg, symbol, op);
 
-		BLOG_DEBUG("Registered operator '%s' as '%c'", itr->name, op->symbol);
+		BLOG_DEBUG("Registered node '%s' as '%c'", itr->name, op->symbol);
 	}
 }
 
 void
-bg_operator_registry_cleanup(bg_operator_registry_t* reg) {
+bg_node_registry_cleanup(bg_node_registry_t* reg) {
 	bhash_cleanup(reg);
 }
 
-bg_operator_t*
-bg_operator_registry_lookup(bg_operator_registry_t* reg, bg_sym_t sym) {
+const bg_node_t*
+bg_node_registry_lookup(const bg_node_registry_t* reg, bg_sym_t sym) {
 	bhash_index_t index = bhash_find(reg, sym);
 	return bhash_is_valid(index) ? reg->values[index] : NULL;
 }
 
-bg_sig_val_t
-bg_sig_val_null(void) {
-	return (bg_sig_val_t){ .internal = nanbox_null().as_double };
-}
+void
+bg_pipeline_reinit(bg_pipeline_t** pipeline_ptr, bgame_allocator_t* allocator) {
+	bg_pipeline_t* pipeline = *pipeline_ptr;
+	if (pipeline == NULL) {
+		pipeline = bgame_malloc(sizeof(*pipeline), allocator);
+		*pipeline = (bg_pipeline_t){
+			.allocator = allocator,
+		};
+		*pipeline_ptr = pipeline;
+	}
 
-bg_sig_val_t
-bg_sig_val_number(double number) {
-	return (bg_sig_val_t){ .internal = nanbox_from_double(number).as_double };
-}
+	bhash_config_t hconfig = bhash_config_default();
+	hconfig.memctx = allocator;
 
-double
-bg_sig_val_to_number(bg_sig_val_t sigval) {
-	return bg_sig_val_to_number_with_default(sigval, NAN);
-}
+	bhash_reinit(&pipeline->nodes, hconfig);
 
-double
-bg_sig_val_to_number_with_default(bg_sig_val_t sigval, double default_value) {
-	nanbox_t nanbox = { .as_double = sigval.internal };
-	return nanbox_is_double(nanbox) ? nanbox_to_double(nanbox) : default_value;
-}
-
-bool
-bg_sig_val_is_null(bg_sig_val_t sigval) {
-	return nanbox_is_null((nanbox_t){ .as_double = sigval.internal });
-}
-
-bool
-bg_sig_val_is_number(bg_sig_val_t sigval) {
-	return nanbox_is_number((nanbox_t){ .as_double = sigval.internal });
+	hconfig.removable = false;
+	bhash_reinit(&pipeline->consts, hconfig);
+	bhash_reinit(&pipeline->values, hconfig);
+	bhash_reinit(&pipeline->edges, hconfig);
+	bhash_reinit(&pipeline->pull_arcs, hconfig);
 }
 
 void
-bg_pipeline_reinit(bg_pipeline_t** pipeline, bgame_allocator_t* allocator);
+bg_pipeline_cleanup(bg_pipeline_t** pipeline_ptr) {
+	bg_pipeline_t* pipeline = *pipeline_ptr;
+
+	bhash_cleanup(&pipeline->nodes);
+	bhash_cleanup(&pipeline->consts);
+	bhash_cleanup(&pipeline->values);
+	bhash_cleanup(&pipeline->edges);
+	bhash_cleanup(&pipeline->pull_arcs);
+	bgame_free(pipeline, pipeline->allocator);
+
+	*pipeline_ptr = NULL;
+}
 
 void
-bg_pipeline_cleanup(bg_pipeline_t** pipeline);
+bg_pipeline_set_params(bg_pipeline_t* pipeline, bg_pipeline_params_t params) {
+	pipeline->params = params;
+}
 
 void
-bg_pipeline_build(bg_pipeline_t* pipeline, bg_grid_t* grid);
+bg_pipeline_build(
+	bg_pipeline_t* pipeline,
+	const bg_node_registry_t* node_registry,
+	const bg_grid_t* grid
+) {
+	bhash_clear(&pipeline->consts);
+	int version = ++pipeline->version;
 
-bg_eval_ctx_t*
-bg_pipeline_begin_eval(bg_pipeline_t* pipeline, bg_grid_params_t params);
+	// Build pipeline from the grid
+	for (bhash_index_t i = 0; i < bhash_len(grid); ++i) {
+		bg_pos_t pos = grid->keys[i];
+		char symbol = grid->values[i];
 
-void
-bg_pipeline_end_eval(bg_eval_ctx_t* ctx);
+		int num = bg_decode_base36(symbol);
+		if (num >= 0) {
+			bhash_put(&pipeline->consts, pos, (bg_signal_t){ num });
+		} else {
+			const bg_node_t* node = bg_node_registry_lookup(node_registry, symbol);
 
-void
-bg_pipeline_step(bg_eval_ctx_t* ctx);
+			if (node == NULL) { continue; }
+
+			bhash_alloc_result_t alloc_result = bhash_alloc(&pipeline->nodes, pos);
+			pipeline->nodes.keys[alloc_result.index] = pos;
+			bg_node_data_t* node_data = &pipeline->nodes.values[alloc_result.index];
+
+			bool need_init = true;
+			void* userdata = NULL;
+			if (!alloc_result.is_new) {
+				if (node_data->symbol == symbol) {
+					// Same type, propagate userdata which could still be NULL
+					// so we need the need_init flag to control reinitialization
+					need_init = false;
+					userdata = node_data->userdata;
+				} else {
+					// Type change, cleanup existing userdata
+					const bg_node_t* old_node = bg_node_registry_lookup(node_registry, node_data->symbol);
+					bg_node_ctx_t ctx = {
+						.phase = BG_EVAL_CLEANUP,
+						.pipeline = pipeline,
+						.pos = pos,
+						.node_data = node_data,
+					};
+					old_node->eval(&ctx);
+				}
+			}
+
+			*node_data = (bg_node_data_t){
+				.node = node,
+				.symbol = symbol,
+				.version = version,
+				.userdata = userdata,
+			};
+
+			if (need_init) {
+				bg_node_ctx_t ctx = {
+					.phase = BG_EVAL_INIT,
+					.pipeline = pipeline,
+					.pos = pos,
+					.node_data = node_data,
+				};
+				node_data->node->eval(&ctx);
+			}
+		}
+	}
+
+	// Clean up removed nodes
+	for (bhash_index_t i = 0; i < bhash_len(&pipeline->nodes);) {
+		bg_pos_t pos = pipeline->nodes.keys[i];
+		bg_node_data_t* node_data = &pipeline->nodes.values[i];
+
+		if (node_data->version == version) { ++i; continue; }
+
+		// Lookup again instead of relying on node_data->node since there could
+		// be a reload
+		const bg_node_t* node = bg_node_registry_lookup(node_registry, node_data->symbol);
+		if (node == NULL) {
+			BLOG_WARN(
+				"Could not find node for symbol '%c' at (%d, %d)",
+				node_data->symbol,
+				pos.x, pos.y
+			);
+			continue;
+		}
+
+		bg_node_ctx_t ctx = {
+			.phase = BG_EVAL_CLEANUP,
+			.pipeline = pipeline,
+			.pos = pos,
+			.node_data = node_data,
+		};
+		node->eval(&ctx);
+
+		bhash_remove(&pipeline->nodes, pos);
+	}
+
+	// Write consts
+	bhash_clear(&pipeline->values);
+	for (bhash_index_t i = 0; i < bhash_len(&pipeline->consts); ++i) {
+		bhash_put(&pipeline->values, pipeline->consts.keys[i], pipeline->consts.values[i]);
+	}
+
+	// Probe for connections
+	bhash_clear(&pipeline->edges);
+	bhash_clear(&pipeline->pull_arcs);
+	for (int probe_count = 0; probe_count < 2 ; ++probe_count) {
+		// Run probe twice so that input/output order does not matter
+		for (bhash_index_t i = 0; i < bhash_len(&pipeline->nodes); ++i) {
+			bg_pos_t pos = pipeline->nodes.keys[i];
+			bg_node_data_t* node_data = &pipeline->nodes.values[i];
+			bg_node_ctx_t ctx = {
+				.phase = BG_EVAL_PROBE,
+				.pipeline = pipeline,
+				.pos = pos,
+				.node_data = node_data,
+			};
+			node_data->node->eval(&ctx);
+		}
+	}
+}
 
 int
-bg_pipeline_count_edges(bg_eval_ctx_t* ctx);
+bg_pipeline_count_edges(bg_pipeline_t* pipeline);
+
+const bg_edge_t*
+bg_pipeline_get_edges(bg_pipeline_t* pipeline);
+
+const bg_pipeline_params_t*
+bg_node_get_pipeline_params(bg_node_ctx_t* ctx) {
+	return &ctx->pipeline->params;
+}
+
+void*
+bg_node_get_userdata(bg_node_ctx_t* ctx) {
+	return ctx->node_data->userdata;
+}
+
+void
+bg_node_set_userdata(bg_node_ctx_t* ctx, void* userdata) {
+	ctx->node_data->userdata = userdata;
+}
+
+void*
+bg_node_realloc(bg_node_ctx_t* ctx, void* ptr, size_t size) {
+	return bgame_realloc(ptr, size, ctx->pipeline->allocator);
+}
+
+bg_pos_t
+bg_node_get_pos(bg_node_ctx_t* ctx) {
+	return ctx->pos;
+}
+
+bg_eval_phase_t
+bg_node_get_eval_phase(bg_node_ctx_t* ctx) {
+	return ctx->phase;
+}
+
+bg_signal_t
+bg_node_get_input(bg_node_ctx_t* ctx, bg_input_desc_t desc) {
+	bg_signal_t* value = bhash_get_value(&ctx->pipeline->values, desc.pos);
+
+	if (ctx->phase == BG_EVAL_PROBE) {
+		bg_edge_t edge = {
+			.from = desc.pos,
+			.to = ctx->pos,
+		};
+		bg_edge_data_t edge_data = {
+			.is_input = true,
+			.desc.input = desc,
+		};
+		edge_data.desc.input.input_found = NULL;
+		bhash_put(&ctx->pipeline->edges, edge, edge_data);
+	}
+
+	if (value == NULL && ctx->phase == BG_EVAL_PROCESS) {
+		// Pull data from dependency
+		bg_pull_arc_t* arc = bhash_get_value(&ctx->pipeline->pull_arcs, desc.pos);
+		if (arc != NULL) {
+			bg_node_ctx_t inner_ctx = {
+				.phase = BG_EVAL_PROCESS,
+				.pipeline = ctx->pipeline,
+				.node_data = arc->node_data,
+				.pos = arc->pos,
+			};
+			bhash_remove(&ctx->pipeline->pull_arcs, desc.pos);  // Prevent cycle
+			arc->node_data->node->eval(&inner_ctx);
+			value = bhash_get_value(&ctx->pipeline->values, desc.pos);
+		}
+	}
+
+	if (desc.input_found != NULL) {
+		*desc.input_found = value != NULL;
+	}
+
+	return value != NULL ? *value : desc.default_value;
+}
+
+bg_output_handle_t
+bg_node_get_output(bg_node_ctx_t* ctx, bg_output_desc_t desc) {
+	bhash_alloc_result_t alloc_result = bhash_alloc(&ctx->pipeline->values, desc.pos);
+
+	if (ctx->phase == BG_EVAL_PROBE) {
+		bg_edge_t edge = {
+			.from = desc.pos,
+			.to = ctx->pos,
+		};
+		bg_edge_data_t edge_data = {
+			.is_input = false,
+			.desc.output = desc,
+		};
+		edge_data.desc.input.input_found = NULL;
+		bhash_put(&ctx->pipeline->edges, edge, edge_data);
+	}
+
+	if (alloc_result.is_new) {
+		bg_pull_arc_t pull_arc = {
+			.pos = ctx->pos,
+			.node_data = ctx->node_data,
+		};
+		bhash_put(&ctx->pipeline->pull_arcs, desc.pos, pull_arc);
+		return (bg_output_handle_t){
+			.enabled = true,
+			.pos = desc.pos,
+		};
+	} else {
+		// TODO: highlight conflicting outputs (2 nodes writes to the same cell)
+		return (bg_output_handle_t){ .enabled = false };
+	}
+}
+
+void
+bg_node_set_output_value(bg_node_ctx_t* ctx, bg_output_handle_t handle, bg_signal_t value) {
+	if (handle.enabled && ctx->phase == BG_EVAL_PROCESS) {
+		bhash_put(&ctx->pipeline->values, handle.pos, value);
+	}
+}
+
+int
+bg_pipeline_count_edges(bg_pipeline_t* pipeline) {
+	return bhash_len(&pipeline->edges);
+}
+
+const bg_edge_t*
+bg_pipeline_get_edges(bg_pipeline_t* pipeline) {
+	return pipeline->edges.keys;
+}
+
+const bg_edge_data_t*
+bg_pipeline_get_edge_data(bg_pipeline_t* pipeline) {
+	return pipeline->edges.values;
+}
+
+void
+bg_pipeline_process(bg_pipeline_t* pipeline) {
+	// Always write constants
+	for (bhash_index_t i = 0; i < bhash_len(&pipeline->consts); ++i) {
+		bhash_put(&pipeline->values, pipeline->consts.keys[i], pipeline->consts.values[i]);
+	}
+
+	// Prepare pull arcs
+	bhash_clear(&pipeline->pull_arcs);
+	for (bhash_index_t i = 0; i < bhash_len(&pipeline->nodes); ++i) {
+		bg_pos_t pos = pipeline->nodes.keys[i];
+		bg_node_data_t* node_data = &pipeline->nodes.values[i];
+		bg_node_ctx_t ctx = {
+			.phase = BG_EVAL_PROBE,
+			.pipeline = pipeline,
+			.pos = pos,
+			.node_data = node_data,
+		};
+		node_data->node->eval(&ctx);
+	}
+
+	// Evaluate from pull nodes
+}

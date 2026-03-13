@@ -6,6 +6,8 @@ set(SOURCES
 
 	"nodes/oscillators.c"
 	"nodes/io.c"
+	"nodes/arithmetic.c"
+	"nodes/wiring.c"
 )
 add_bgame_app(beatgrid "${SOURCES}")
 

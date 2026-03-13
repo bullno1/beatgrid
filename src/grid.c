@@ -311,14 +311,15 @@ bg_node_get_input(bg_node_ctx_t* ctx, bg_input_desc_t desc) {
 		// Pull data from dependency
 		bg_pull_arc_t* arc = bhash_get_value(&ctx->pipeline->pull_arcs, desc.pos);
 		if (arc != NULL) {
+			bg_pull_arc_t arc_val = *arc;  // Make a copy since we are going to remove this
 			bg_node_ctx_t inner_ctx = {
 				.phase = BG_EVAL_PROCESS,
 				.pipeline = ctx->pipeline,
-				.node_data = arc->node_data,
-				.pos = arc->pos,
+				.node_data = arc_val.node_data,
+				.pos = arc_val.pos,
 			};
 			bhash_remove(&ctx->pipeline->pull_arcs, desc.pos);  // Prevent cycle
-			arc->node_data->node->eval(&inner_ctx);
+			arc_val.node_data->node->eval(&inner_ctx);
 			value = bhash_get_value(&ctx->pipeline->values, desc.pos);
 		}
 	}

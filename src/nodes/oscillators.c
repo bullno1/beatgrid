@@ -31,9 +31,9 @@ sine_eval(bg_node_ctx_t* ctx) {
 			bg_node_set_output_value(ctx, output, cf_sin(state->phase));
 
 			float dt = bg_node_get_pipeline_params(ctx)->dt;
-			state->phase += 2.0 * M_PI * freq * dt;
-			if (state->phase >= 2.0 * M_PI) {
-				state->phase -= 2.0 * M_PI;
+			state->phase += 2.0 * CF_PI * freq * dt;
+			if (state->phase >= 2.0 * CF_PI) {
+				state->phase -= 2.0 * CF_PI;
 			}
 		} else {
 			bg_node_set_output_value(ctx, output, NAN);

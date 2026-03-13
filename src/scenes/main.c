@@ -17,7 +17,7 @@ static float MOUSE_THRESHOLD = 0.001f;
 
 typedef struct {
 	bg_grid_params_t grid_params;
-	bg_pipeline_t* pipeline;
+	bg_grid_t grid;
 } audio_cmd_t;
 
 #define SCENE_VAR(TYPE, NAME) BGAME_PRIVATE_VAR(main, TYPE, NAME)
@@ -26,14 +26,14 @@ SCENE_VAR(bg_pos_t, cursor_pos)
 SCENE_VAR(CF_V2, cursor_smooth_pos)
 SCENE_VAR(bg_grid_t, grid)
 SCENE_VAR(bg_node_registry_t, node_registry)
-SCENE_VAR(bg_pipeline_t*, pipeline)
+SCENE_VAR(bg_pipeline_t*, editor_pipeline)
 SCENE_VAR(bg_pipeline_params_t, pipeline_params)
 SCENE_VAR(SDL_AudioStream*, audio_stream)
 SCENE_VAR(bool, playing)
 
 SCENE_VAR(audio_cmd_t*, audio_cmd_buf)
 SCENE_VAR(tribuf_t, audio_cmd_queue)
-SCENE_VAR(bg_pipeline_t*, playing_pipeline)
+SCENE_VAR(bg_pipeline_t*, audio_pipeline)
 SCENE_VAR(float*, audio_buf)
 SCENE_VAR(int, audio_buf_len)
 static bg_output_t audio_outputs[1] = { 0 };
@@ -84,12 +84,12 @@ audio_callback(
 
 	audio_cmd_t* cmd = tribuf_begin_recv(&audio_cmd_queue);
 	if (cmd != NULL) {
-		playing_pipeline = cmd->pipeline;
-		bg_pipeline_set_params(playing_pipeline, (bg_pipeline_params_t){
+		bg_pipeline_set_params(audio_pipeline, (bg_pipeline_params_t){
 			.dt = 1.f / 44100.f,
 			.num_outputs = CF_ARRAY_SIZE(audio_outputs),
 			.outputs = audio_outputs,
 		});
+		bg_pipeline_build(audio_pipeline, &node_registry, &cmd->grid);
 		tribuf_end_recv(&audio_cmd_queue);
 	}
 
@@ -100,7 +100,7 @@ audio_callback(
 	}
 
 	for (int i = 0; i < num_frames_needed; ++i) {
-		bg_pipeline_process(playing_pipeline);
+		bg_pipeline_process(audio_pipeline);
 
 		float sample = audio_outputs[0].value / (float)audio_outputs[0].count;
 		if (!isnan(sample)) {  // NaN is emitted as reset signal
@@ -120,19 +120,19 @@ init(void) {
 	bg_grid_reinit(&grid, scene_allocator);
 	bg_node_registry_reinit(&node_registry, scene_allocator);
 
-	bg_pipeline_reinit(&pipeline, scene_allocator);
-	bg_pipeline_set_params(pipeline, pipeline_params);
-	bg_pipeline_build(pipeline, &node_registry, &grid);
+	bg_pipeline_reinit(&editor_pipeline, scene_allocator);
+	bg_pipeline_set_params(editor_pipeline, pipeline_params);
+	bg_pipeline_build(editor_pipeline, &node_registry, &grid);
 
 	if (bgame_current_scene_state() == BGAME_SCENE_INITIALIZING) {
 		audio_cmd_buf = bgame_zalloc(sizeof(audio_cmd_t) * 3, scene_allocator);
-
-		bg_pipeline_reinit(&audio_cmd_buf[0].pipeline, scene_allocator);
-		bg_pipeline_reinit(&audio_cmd_buf[1].pipeline, scene_allocator);
-		bg_pipeline_reinit(&audio_cmd_buf[2].pipeline, scene_allocator);
-		playing_pipeline = audio_cmd_buf[2].pipeline;
-
+		bg_grid_reinit(&audio_cmd_buf[0].grid, scene_allocator);
+		bg_grid_reinit(&audio_cmd_buf[1].grid, scene_allocator);
+		bg_grid_reinit(&audio_cmd_buf[2].grid, scene_allocator);
 		tribuf_init(&audio_cmd_queue, audio_cmd_buf, sizeof(audio_cmd_t));
+
+		bg_pipeline_reinit(&audio_pipeline, scene_allocator);
+		bg_pipeline_set_params(audio_pipeline, pipeline_params);
 
 		audio_stream = SDL_OpenAudioDeviceStream(
 			SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
@@ -176,13 +176,14 @@ init(void) {
 static void
 cleanup(void) {
 	SDL_DestroyAudioStream(audio_stream);
-	bg_pipeline_cleanup(&audio_cmd_buf[0].pipeline);
-	bg_pipeline_cleanup(&audio_cmd_buf[1].pipeline);
-	bg_pipeline_cleanup(&audio_cmd_buf[2].pipeline);
+	bg_grid_cleanup(&audio_cmd_buf[0].grid);
+	bg_grid_cleanup(&audio_cmd_buf[1].grid);
+	bg_grid_cleanup(&audio_cmd_buf[2].grid);
 	bgame_free(audio_cmd_buf, scene_allocator);
 	bgame_free(audio_buf, scene_allocator);
 
-	bg_pipeline_cleanup(&pipeline);
+	bg_pipeline_cleanup(&editor_pipeline);
+	bg_pipeline_cleanup(&audio_pipeline);
 	bg_node_registry_cleanup(&node_registry);
 	bg_grid_cleanup(&grid);
 
@@ -194,18 +195,17 @@ cleanup(void) {
 static void
 before_reload(void) {
 	SDL_SetAudioStreamGetCallback(audio_stream, NULL, NULL);
-	SDL_LockAudioStream(audio_stream);
-	SDL_UnlockAudioStream(audio_stream);
 }
 
 static void
 after_reload(void) {
-	bg_pipeline_reinit(&audio_cmd_buf[0].pipeline, scene_allocator);
-	bg_pipeline_reinit(&audio_cmd_buf[1].pipeline, scene_allocator);
-	bg_pipeline_reinit(&audio_cmd_buf[2].pipeline, scene_allocator);
+	bg_grid_reinit(&audio_cmd_buf[0].grid, scene_allocator);
+	bg_grid_reinit(&audio_cmd_buf[1].grid, scene_allocator);
+	bg_grid_reinit(&audio_cmd_buf[2].grid, scene_allocator);
 
-	bg_pipeline_build(playing_pipeline, &node_registry, &grid);
-	bg_pipeline_set_params(playing_pipeline, (bg_pipeline_params_t){
+	bg_pipeline_reinit(&audio_pipeline, scene_allocator);
+	bg_pipeline_build(audio_pipeline, &node_registry, &grid);
+	bg_pipeline_set_params(audio_pipeline, (bg_pipeline_params_t){
 		.dt = 1.f / 48000.f,
 		.num_outputs = CF_ARRAY_SIZE(audio_outputs),
 		.outputs = audio_outputs,
@@ -226,7 +226,12 @@ grid_pos_to_world(bg_pos_t grid_pos) {
 static void
 send_audio_state(void) {
 	audio_cmd_t* cmd = tribuf_begin_send(&audio_cmd_queue);
-	bg_pipeline_build(cmd->pipeline, &node_registry, &grid);
+
+	bhash_clear(&cmd->grid);
+	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
+		bhash_put(&cmd->grid, grid.keys[i], grid.values[i]);
+	}
+
 	tribuf_end_send(&audio_cmd_queue);
 }
 
@@ -302,7 +307,7 @@ update(void) {
 	}
 
 	if (grid_modified) {
-		bg_pipeline_build(pipeline, &node_registry, &grid);
+		bg_pipeline_build(editor_pipeline, &node_registry, &grid);
 		send_audio_state();
 	}
 // }}}
@@ -366,8 +371,8 @@ update(void) {
 	cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
 
 	// I/O lines
-	int num_edges = bg_pipeline_count_edges(pipeline);
-	const bg_edge_t* edges = bg_pipeline_get_edges(pipeline);
+	int num_edges = bg_pipeline_count_edges(editor_pipeline);
+	const bg_edge_t* edges = bg_pipeline_get_edges(editor_pipeline);
 	for (int i = 0; i < num_edges; ++i) {
 		CF_V2 from_pos = grid_pos_to_world(edges[i].from);
 		CF_V2 to_pos   = grid_pos_to_world(edges[i].to);

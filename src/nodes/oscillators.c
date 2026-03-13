@@ -28,10 +28,13 @@ sine_eval(bg_node_ctx_t* ctx) {
 
 	if (bg_node_is_processing(ctx)) {
 		if (!isnan(freq)) {
-			bg_node_set_output_value(ctx, output, cf_sin(state->phase * 2.f * CF_PI));
+			bg_node_set_output_value(ctx, output, cf_sin(state->phase));
 
-			state->phase += freq * bg_node_get_pipeline_params(ctx)->dt;
-			if (state->phase >= 1.f) { state->phase -= 1.f; }
+			float dt = bg_node_get_pipeline_params(ctx)->dt;
+			state->phase += 2.0 * M_PI * freq * dt;
+			if (state->phase >= 2.0 * M_PI) {
+				state->phase -= 2.0 * M_PI;
+			}
 		} else {
 			bg_node_set_output_value(ctx, output, NAN);
 		}

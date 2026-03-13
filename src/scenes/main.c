@@ -35,7 +35,7 @@ SCENE_VAR(audio_cmd_t*, audio_cmd_buf)
 SCENE_VAR(tribuf_t, audio_cmd_queue)
 SCENE_VAR(bg_pipeline_t*, playing_pipeline)
 SCENE_VAR(float*, audio_buf)
-SCENE_VAR(int, audio_buf_size)
+SCENE_VAR(int, audio_buf_len)
 static bg_output_t audio_outputs[1] = { 0 };
 
 SCENE_VAR(CF_ButtonBinding, btn_cursor_up)
@@ -86,19 +86,20 @@ audio_callback(
 	if (cmd != NULL) {
 		playing_pipeline = cmd->pipeline;
 		bg_pipeline_set_params(playing_pipeline, (bg_pipeline_params_t){
-			.dt = 1.f / 48000.f,
+			.dt = 1.f / 44100.f,
 			.num_outputs = CF_ARRAY_SIZE(audio_outputs),
 			.outputs = audio_outputs,
 		});
 		tribuf_end_recv(&audio_cmd_queue);
 	}
 
-	if (additional_amount > audio_buf_size) {
-		audio_buf = bgame_realloc(audio_buf, sizeof(float) * additional_amount, scene_allocator);
-		audio_buf_size = additional_amount;
+	int num_frames_needed = additional_amount / sizeof(float);
+	if (num_frames_needed > audio_buf_len) {
+		audio_buf = bgame_realloc(audio_buf, sizeof(float) * num_frames_needed, scene_allocator);
+		audio_buf_len = num_frames_needed;
 	}
 
-	for (int i = 0; i < additional_amount; ++i) {
+	for (int i = 0; i < num_frames_needed; ++i) {
 		bg_pipeline_process(playing_pipeline);
 
 		float sample = audio_outputs[0].value / (float)audio_outputs[0].count;
@@ -137,7 +138,7 @@ init(void) {
 			SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
 			&(SDL_AudioSpec){
 				.channels = 1,
-				.freq = 48000,
+				.freq = 44100,
 				.format = SDL_AUDIO_F32,
 			},
 			audio_callback,

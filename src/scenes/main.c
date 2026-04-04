@@ -358,6 +358,12 @@ update(void) {
 
 	// Cursor
 	CF_V2 cursor_target = grid_pos_to_world(cursor_pos);
+	CF_Aabb cursor_box = cf_make_aabb_pos_w_h(
+		cursor_target,
+		GRID_SIZE, GRID_SIZE
+	);
+	cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
+
 	cursor_smooth_pos = cf_add(
 		cursor_smooth_pos,
 		cf_mul(
@@ -365,11 +371,13 @@ update(void) {
 			(1 - cf_exp(- CURSOR_MOVE_SPEED * CF_DELTA_TIME))
 		)
 	);
-	CF_Aabb cursor_box = cf_make_aabb_pos_w_h(
+	CF_Aabb cursor_trail = cf_make_aabb_pos_w_h(
 		cursor_smooth_pos,
 		GRID_SIZE, GRID_SIZE
 	);
-	cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
+	cf_draw_push_color(cf_make_color_rgba(255, 255, 255, 200));
+	cf_draw_box_rounded(cursor_trail, 0.5f, 1.2f);
+	cf_draw_pop_color();
 
 	// I/O lines
 	int num_edges = bg_pipeline_count_edges(editor_pipeline);

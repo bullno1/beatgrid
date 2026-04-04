@@ -118,8 +118,8 @@ init(void) {
 	cf_clear_color(0.0f, 0.0f, 0.0f, 0.0f);
 
 	bg_grid_reinit(&grid, scene_allocator);
-	bg_node_registry_reinit(&node_registry, scene_allocator);
 
+	bg_node_registry_reinit(&node_registry, scene_allocator);
 	bg_pipeline_reinit(&editor_pipeline, scene_allocator);
 	bg_pipeline_set_params(editor_pipeline, pipeline_params);
 	bg_pipeline_build(editor_pipeline, &node_registry, &grid);
@@ -203,6 +203,7 @@ after_reload(void) {
 	bg_grid_reinit(&audio_cmd_buf[1].grid, scene_allocator);
 	bg_grid_reinit(&audio_cmd_buf[2].grid, scene_allocator);
 
+	bg_node_registry_reinit(&node_registry, scene_allocator);
 	bg_pipeline_reinit(&audio_pipeline, scene_allocator);
 	bg_pipeline_build(audio_pipeline, &node_registry, &grid);
 	bg_pipeline_set_params(audio_pipeline, (bg_pipeline_params_t){

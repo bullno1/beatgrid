@@ -27,8 +27,8 @@ struct bg_pipeline_s {
 	BHASH_TABLE(bg_pos_t, bg_node_data_t) nodes;
 	BHASH_TABLE(bg_pos_t, bg_signal_t) consts;
 	BHASH_TABLE(bg_pos_t, bg_signal_t) values;
-	BHASH_TABLE(bg_edge_t, bg_edge_data_t) edges;
 	BHASH_TABLE(bg_pos_t, bg_pull_arc_t) pull_arcs;
+	BHASH_TABLE(bg_edge_t, bg_edge_data_t) edges;
 	barray(bg_pos_t) pull_nodes;
 };
 
@@ -50,6 +50,28 @@ bg_decode_base36(char c) {
 	} else {
 		return -1;  // Invalid
 	}
+}
+
+// https://nullprogram.com/blog/2018/07/31/
+static inline uint64_t
+splittable64(uint64_t x) {
+	x ^= x >> 30;
+	x *= 0xbf58476d1ce4e5b9U;
+	x ^= x >> 27;
+	x *= 0x94d049bb133111ebU;
+	x ^= x >> 31;
+	return x;
+}
+
+static bhash_hash_t
+bg_hash_pos(const void* key, size_t size) {
+	bg_pos_t pos = *(bg_pos_t*)key;
+	return splittable64((uint64_t)pos.x << 32 | pos.y);
+}
+
+static bhash_hash_t
+bg_hash_edge(const void* key, size_t size) {
+	return bhash_hash(key, sizeof(bg_edge_t));
 }
 
 void
@@ -98,6 +120,7 @@ bg_pipeline_reinit(bg_pipeline_t** pipeline_ptr, bgame_allocator_t* allocator) {
 
 	bhash_config_t hconfig = bhash_config_default();
 	hconfig.memctx = allocator;
+	hconfig.hash = bg_hash_pos;
 
 	bhash_reinit(&pipeline->nodes, hconfig);
 	bhash_reinit(&pipeline->pull_arcs, hconfig);
@@ -105,6 +128,7 @@ bg_pipeline_reinit(bg_pipeline_t** pipeline_ptr, bgame_allocator_t* allocator) {
 	hconfig.removable = false;
 	bhash_reinit(&pipeline->consts, hconfig);
 	bhash_reinit(&pipeline->values, hconfig);
+	hconfig.hash = bg_hash_edge;
 	bhash_reinit(&pipeline->edges, hconfig);
 }
 

@@ -9,7 +9,7 @@ H
 I: Input
 J:
 K:
-L:
+L: Square
 M: Midi frequency
 N: North
 O: Output

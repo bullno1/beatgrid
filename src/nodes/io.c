@@ -18,7 +18,10 @@ output_eval(bg_node_ctx_t* ctx) {
 
 BG_NODE(output) = {
 	.symbol = 'O',
-	.eval = output_eval,
+	.category = "I/O",
 	.title = "Output",
+	.description = "Output the signal",
+
+	.eval = output_eval,
 	.pull = true,
 };

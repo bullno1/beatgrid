@@ -13,7 +13,7 @@
 #include "../grid.h"
 #include "../tribuf.h"
 
-static float GRID_SIZE = 24.f;
+static float GRID_SIZE = 20.f;
 static float KEY_DELAY = 0.2f;
 static float KEY_REPEAT = 0.1f;
 static float KEY_BUFFER = 0.00f;
@@ -56,6 +56,8 @@ SCENE_VAR(CF_ButtonBinding, btn_cursor_right)
 SCENE_VAR(CF_ButtonBinding, btn_del_sym)
 SCENE_VAR(CF_ButtonBinding, btn_play_pause)
 SCENE_VAR(CF_ButtonBinding, btn_scroll_multiply)
+
+SCENE_VAR(bool, right_sidebar_enabled)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
@@ -107,7 +109,7 @@ audio_callback(
 		tribuf_end_recv(&audio_cmd_queue);
 	}
 
-	int num_frames_needed = additional_amount / sizeof(float);
+	int num_frames_needed = total_amount / sizeof(float);
 	if (num_frames_needed > audio_buf_len) {
 		audio_buf = bgame_realloc(audio_buf, sizeof(float) * num_frames_needed, scene_allocator);
 		audio_buf_len = num_frames_needed;
@@ -252,6 +254,14 @@ fixed_update(void* userdata) {
 static CF_V2
 grid_pos_to_world(bg_pos_t grid_pos) {
 	return cf_mul(cf_v2(grid_pos.x, grid_pos.y), GRID_SIZE);
+}
+
+static bg_pos_t
+world_pos_to_grid_pos(CF_V2 world_pos) {
+	return (bg_pos_t){
+		.x = cf_round(world_pos.x / GRID_SIZE),
+		.y = cf_round(world_pos.y / GRID_SIZE),
+	};
 }
 
 static void
@@ -532,6 +542,45 @@ update(void) {
 					.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
 					.custom = bgame_custom_ui_element(grid_element, NULL),
 				}) {
+				}
+			}
+
+			CLAY(CLAY_ID("RightSidebar"), {
+				.layout.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_GROW(0) },
+				.border = {
+					.color = UI_BORDER_COLOR,
+					.width = CLAY_BORDER_ALL(1)
+				},
+			}) {
+				if (right_sidebar_enabled) {
+					CLAY(CLAY_ID_LOCAL("Content"), {
+						.layout = {
+							.sizing = { CLAY_SIZING_FIXED(300), CLAY_SIZING_GROW(0) },
+						},
+					}) {
+					}
+				}
+
+				CLAY(CLAY_ID_LOCAL("PullTab"), {
+					.layout = {
+						.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_GROW(0) },
+						.layoutDirection = CLAY_TOP_TO_BOTTOM,
+						.childAlignment.y = CLAY_ALIGN_Y_CENTER,
+						.padding = { .left = 1, .right = 1 },
+					},
+				}) {
+					CLAY_TEXT(right_sidebar_enabled ? CLAY_STRING(">") : CLAY_STRING("<"), {
+						.fontId = FONT_CHROME,
+						.fontSize = MENU_BAR_FONT_SIZE,
+						.textColor = UI_TEXT_COLOR,
+						.userData = bgame_ui_text_config((bgame_ui_text_config_t){
+							.effect = BGAME_UI_DISABLE_TEXT_EFFECT,
+						})
+					});
+
+					if (Clay_Hovered() && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
+						right_sidebar_enabled = !right_sidebar_enabled;
+					}
 				}
 			}
 		}

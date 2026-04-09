@@ -38,6 +38,7 @@ typedef struct {
 } bg_output_t;
 
 typedef struct {
+	const char* category;
 	const char* title;
 	const char* description;
 	bg_sym_t symbol;

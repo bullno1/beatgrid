@@ -6,8 +6,15 @@
 #include <blog.h>
 #include <cute.h>
 
-#if BGAME_RELOADABLE
-#include <bent.h>
+#ifdef __EMSCRIPTEN__
+
+#include <emscripten/html5.h>
+
+EM_JS(void, get_html_window_size, (int* width, int* height), {
+	HEAP32[width  >> 2] = window.innerWidth;
+	HEAP32[height >> 2] = window.innerHeight;
+});
+
 #endif
 
 static const char* WINDOW_TITLE = "beatgrid";
@@ -36,13 +43,21 @@ static void
 init(int argc, const char** argv) {
 	// Cute Framework
 	if (!app_created) {
+		int width  = 1280;
+		int height = 768;
+
+#ifdef __EMSCRIPTEN__
+		get_html_window_size(&width, &height);
+		BLOG_INFO("Canvas size: %d x %d", width, height);
+#endif
+
 		BLOG_INFO("Creating app");
 		int options =
 			  CF_APP_OPTIONS_WINDOW_POS_CENTERED_BIT
 			| CF_APP_OPTIONS_FILE_SYSTEM_DONT_DEFAULT_MOUNT_BIT
 			| CF_APP_OPTIONS_RESIZABLE_BIT
 			;
-		CF_Result result = cf_make_app(WINDOW_TITLE, 0, 0, 0, 1280, 720, options, argv[0]);
+		CF_Result result = cf_make_app(WINDOW_TITLE, 0, 0, 0, width, height, options, argv[0]);
 		if (result.code != CF_RESULT_SUCCESS) {
 			BLOG_FATAL("Could not create app: %s", result.details);
 			abort();
@@ -54,6 +69,7 @@ init(int argc, const char** argv) {
 		}
 
 		cf_app_init_imgui();
+
 		app_created = true;
 	}
 

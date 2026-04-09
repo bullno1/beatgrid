@@ -404,6 +404,14 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 	}
 }
 
+static int
+cmp_by_category(const void* lhs_v, const void* rhs_v) {
+	const bg_node_t* lhs = *(const bg_node_t**)lhs_v;
+	const bg_node_t* rhs = *(const bg_node_t**)rhs_v;
+
+	return strcmp(lhs->category, rhs->category);
+}
+
 static void
 update(void) {
 	tribuf_try_swap(&audio_cmd_queue);
@@ -576,12 +584,136 @@ update(void) {
 				},
 			}) {
 				if (right_sidebar_enabled) {
+					bhash_index_t num_nodes = bhash_len(&node_registry);
+					const bg_node_t** node_types = bgame_alloc_for_frame(
+						sizeof(bg_node_t*) * num_nodes, _Alignof(bg_node_t)
+					);
+					for (bhash_index_t i = 0; i < bhash_len(&node_registry); ++i) {
+						node_types[i] = node_registry.values[i];
+					}
+					qsort(node_types, num_nodes, sizeof(node_types[0]), cmp_by_category);
+
 					CLAY(CLAY_ID_LOCAL("Content"), {
 						.layout = {
 							.sizing = { CLAY_SIZING_FIXED(300), CLAY_SIZING_GROW(0) },
 							.layoutDirection = CLAY_TOP_TO_BOTTOM,
 						},
 					}) {
+						const char* last_category = "";
+						bool first_category = true;
+
+						for (bhash_index_t i = 0; i < num_nodes; ++i) {
+							const bg_node_t* node = node_types[i];
+
+							if (strcmp(node->category, last_category) != 0) {  // New category
+								last_category = node->category;
+
+								if (first_category) {
+									first_category = false;
+								} else {
+									Clay__CloseElement();
+								}
+
+								Clay_String clay_category = {
+									.isStaticallyAllocated = true,
+									.chars =  last_category,
+									.length = strlen(last_category)
+								};
+								Clay__OpenElementWithId(CLAY_SID_LOCAL(clay_category));
+								Clay__ConfigureOpenElement((Clay_ElementDeclaration){
+									.layout = {
+										.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+										.layoutDirection = CLAY_TOP_TO_BOTTOM,
+										.padding = CLAY_PADDING_ALL(5),
+									},
+								});
+
+								CLAY(CLAY_ID_LOCAL("Header"), {
+									.layout = {
+										.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+										.layoutDirection = CLAY_TOP_TO_BOTTOM,
+										.padding.bottom = 3,
+									},
+									.border = {
+										.color = {
+											.r = 136.f / 255.f,
+											.g = 0.f,
+											.b = 85.f / 255.f,
+											.a = 1.f,
+										},
+										.width.bottom = 1,
+									},
+								}) {
+									CLAY_TEXT(clay_category, {
+										.fontId = FONT_CHROME,
+										.fontSize = MENU_BAR_FONT_SIZE,
+										.textColor = {
+											.r = 255.f / 255.f,
+											.g = 0.f,
+											.b = 160.f / 255.f,
+											.a = 1.f,
+										},
+									});
+								}
+							}
+
+							CLAY(CLAY_IDI_LOCAL("Item", i), {
+								.layout = {
+									.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+									.padding = CLAY_PADDING_ALL(3),
+									.childAlignment.y = CLAY_ALIGN_Y_CENTER
+								},
+							}) {
+								CLAY(CLAY_ID_LOCAL("Symbol"), {
+									.layout = {
+										.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_FIT(0) },
+										.padding = CLAY_PADDING_ALL(5),
+									},
+								}) {
+									CLAY_TEXT(((Clay_String){ .chars = &node->symbol, .length = 1 }), {
+										.fontId = FONT_CHROME,
+										.fontSize = 24,
+										.textColor = {
+											.r = 0.f / 255.f,
+											.g = 245.f / 255.f,
+											.b = 255.f / 255.f,
+											.a = 1.f,
+										},
+									});
+								}
+
+								CLAY(CLAY_ID_LOCAL("Detail"), {
+									.layout = {
+										.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+										.padding = CLAY_PADDING_ALL(3),
+										.layoutDirection = CLAY_TOP_TO_BOTTOM,
+									},
+								}) {
+									CLAY_TEXT(((Clay_String){ .chars = node->title, .length = strlen(node->title) }), {
+										.fontId = FONT_CHROME,
+										.fontSize = 13,
+										.textColor = {
+											.r = 0.f / 255.f,
+											.g = 255.f / 255.f,
+											.b = 65.f / 255.f,
+											.a = 1.f,
+										},
+									});
+									CLAY_TEXT(((Clay_String){ .chars = node->description, .length = strlen(node->description) }), {
+										.fontId = FONT_CHROME,
+										.fontSize = 13,
+										.textColor = {
+											.r = 7.f / 255.f,
+											.g = 184.f / 255.f,
+											.b = 66.f / 255.f,
+											.a = 1.f,
+										},
+									});
+								}
+							}
+						}
+
+						Clay__CloseElement();
 					}
 				}
 

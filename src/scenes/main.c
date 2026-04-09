@@ -3,6 +3,8 @@
 #include <bgame/allocator/tracked.h>
 #include <bgame/reloadable.h>
 #include <bgame/ui.h>
+#include <bgame/ui/spacer.h>
+#include <bgame/ui/string.h>
 #include <bgame/utils.h>
 #include <cute.h>
 #include <blog.h>
@@ -21,6 +23,12 @@ static float MOUSE_THRESHOLD = 0.001f;
 enum {
 	FONT_DEFAULT,
 	FONT_GRID,
+	FONT_CHROME,
+};
+
+enum {
+	LAYER_GRID,
+	LAYER_OVERLAY,
 };
 
 typedef struct {
@@ -96,6 +104,7 @@ audio_callback(
 			.dt = 1.f / 44100.f,
 			.num_outputs = CF_ARRAY_SIZE(audio_outputs),
 			.outputs = audio_outputs,
+			.grid_params = cmd->grid_params,
 		});
 		bg_pipeline_build(audio_pipeline, &node_registry, &cmd->grid);
 		tribuf_end_recv(&audio_cmd_queue);
@@ -124,6 +133,15 @@ audio_callback(
 static void
 init(void) {
 	cf_clear_color(0.0f, 0.0f, 0.0f, 0.0f);
+
+	if (bgame_current_scene_state() == BGAME_SCENE_INITIALIZING) {
+		pipeline_params = (bg_pipeline_params_t){
+			.dt = 1.f / 48000.f,
+			.grid_params = {
+				.bpm = 120,
+			},
+		};
+	}
 
 	bg_grid_reinit(&grid, scene_allocator);
 
@@ -181,6 +199,7 @@ init(void) {
 	cf_input_enable_ime();
 
 	bgame_register_ui_font(FONT_GRID, font_grid->name);
+	bgame_register_ui_font(FONT_CHROME, font_chrome->name);
 }
 
 static void
@@ -220,6 +239,7 @@ after_reload(void) {
 		.dt = 1.f / 48000.f,
 		.num_outputs = CF_ARRAY_SIZE(audio_outputs),
 		.outputs = audio_outputs,
+		.grid_params = pipeline_params.grid_params,
 	});
 
 	SDL_SetAudioStreamGetCallback(audio_stream, audio_callback, NULL);
@@ -242,6 +262,7 @@ send_audio_state(void) {
 	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
 		bhash_put(&cmd->grid, grid.keys[i], grid.values[i]);
 	}
+	cmd->grid_params = pipeline_params.grid_params;
 
 	tribuf_end_send(&audio_cmd_queue);
 }
@@ -252,9 +273,9 @@ update(void) {
 
 	cf_app_update(fixed_update);
 
-// Input {{{
+	// Input {{{
 
-// Cursor {{{
+	// Cursor {{{
 	if (
 		cf_button_binding_consume_press(btn_cursor_up)
 		||
@@ -297,9 +318,9 @@ update(void) {
 		cursor_pos.x = cf_round(p.x);
 		cursor_pos.y = cf_round(p.y);
 	}
-// }}}
+	// }}}
 
-// Edit {{{
+	// Edit {{{
 	bool grid_modified = false;
 
 	if (cf_button_binding_consume_press(btn_del_sym)) {
@@ -323,7 +344,7 @@ update(void) {
 	}
 // }}}
 
-// Control {{{
+	// Control {{{
 	if (cf_button_binding_consume_press(btn_play_pause)) {
 		playing = !playing;
 
@@ -333,24 +354,120 @@ update(void) {
 			SDL_PauseAudioStreamDevice(audio_stream);
 		}
 	}
-// }}}
 
-// }}}
+	if (cf_key_just_pressed(CF_KEY_F12)) {
+		Clay_SetDebugModeEnabled(!Clay_IsDebugModeEnabled());
+	}
+	// }}}
 
-// Overlay {{{
-// }}}
+	// }}}
 
-// Grid render {{{
-	// Grid
+	// Overlay {{{
+
+	const Clay_Color UI_BORDER_COLOR = { .r = 0.f, .g = 64.f / 255.f, 26.f / 255.f, .a = 1.f };
+	const Clay_Color UI_TEXT_COLOR = { .r = 0.f, .g = 255.f / 255.f, 65.f / 255.f, .a = 1.f };
+
+	bgame_update_ui();
+	Clay_BeginLayout();
+	CLAY(CLAY_ID("Root"), {
+		.layout = {
+			.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+			.layoutDirection = CLAY_TOP_TO_BOTTOM,
+		},
+	}) {
+		CLAY(CLAY_ID("Top"), {
+			.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+		}) {
+		}
+
+		CLAY(CLAY_ID("Mid"), {
+			.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+		}) {
+			CLAY(CLAY_ID("Grid"), {
+				.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+			}) {
+			}
+		}
+
+		// Status bar {{{
+		const int STATUS_BAR_FONT_SIZE = 15;
+		CLAY(CLAY_ID("Bottom"), {
+			.layout = {
+				.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+				.padding = {
+					.top = 5,
+					.bottom = 7,
+				},
+			},
+			.border = {
+				.color = UI_BORDER_COLOR,
+				.width = CLAY_BORDER_ALL(1),
+			},
+			.backgroundColor = { .a = 1.f },
+		}) {
+
+#define STATUS_BOX(NAME) \
+			CLAY(CLAY_ID(#NAME), { \
+				.layout.padding = { .left = 5, .right = 5 }, \
+			}) \
+
+			STATUS_BOX(State) {
+				CLAY_TEXT(playing ? CLAY_STRING("PLAYING") : CLAY_STRING("PAUSED"), {
+					.fontId = FONT_CHROME,
+					.fontSize = STATUS_BAR_FONT_SIZE,
+					.textColor = UI_TEXT_COLOR,
+				});
+			}
+
+			STATUS_BOX(BPM) {
+				CLAY_TEXT(CLAY_STRING("BPM"), {
+					.fontId = FONT_CHROME,
+					.fontSize = STATUS_BAR_FONT_SIZE,
+					.textColor = UI_TEXT_COLOR,
+				});
+
+				CLAY_TEXT(bgame_ui_string("%d", pipeline_params.grid_params.bpm), {
+					.fontId = FONT_CHROME,
+					.fontSize = STATUS_BAR_FONT_SIZE,
+					.textColor = { .r = 0.f, .g = 245.f / 255.f, .b = 255.f / 255.f, .a = 1.f },
+				});
+			}
+
+			bgame_ui_hspacer(CLAY_ID_LOCAL("Spacer"));
+
+			STATUS_BOX(CursorX) {
+				CLAY_TEXT(CLAY_STRING("X"), {
+					.fontId = FONT_CHROME,
+					.fontSize = STATUS_BAR_FONT_SIZE,
+					.textColor = UI_TEXT_COLOR,
+				});
+			}
+
+			STATUS_BOX(CursorY) {
+				CLAY_TEXT(CLAY_STRING("Y"), {
+					.fontId = FONT_CHROME,
+					.fontSize = STATUS_BAR_FONT_SIZE,
+					.textColor = UI_TEXT_COLOR,
+				});
+			}
+		}
+	}
+	// }}}
+
+	Clay_RenderCommandArray render_cmds = Clay_EndLayout(CF_DELTA_TIME);
+	// }}}
+
+	BGAME_SCOPE(cf_draw_push_layer(LAYER_OVERLAY), cf_draw_pop_layer()) {
+		bgame_render_ui(render_cmds);
+	}
+	// }}}
+
+	// Grid render {{{
+
+	Clay_ElementData grid_info = Clay_GetElementData(CLAY_ID("Grid"));
 
 	// Symbols
-	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
-		bg_pos_t pos = grid.keys[i];
-
-		const bg_node_t* node = bg_node_registry_lookup(&node_registry, grid.values[i]);
-		if (node == NULL) { continue; }
-	}
-
+	BGAME_SCOPE(cf_draw_push_layer(LAYER_GRID), cf_draw_pop_layer())
 	BGAME_SCOPE(cf_push_text_effect_active(false), cf_pop_text_effect_active())
 	BGAME_SCOPE(cf_push_font_size(GRID_SIZE), cf_pop_font_size())
 	BGAME_SCOPE(cf_push_font(font_grid->name), cf_pop_font())
@@ -435,7 +552,7 @@ update(void) {
 		}
 	}
 
-// }}}
+	// }}}
 
 	cf_app_draw_onto_screen(true);
 }

@@ -1,6 +1,8 @@
 #include <bgame/entrypoint.h>
 #include <bgame/allocator.h>
+#include <bgame/allocator/tracked.h>
 #include <bgame/scene.h>
+#include <bgame/asset.h>
 #include <blog.h>
 #include <cute.h>
 
@@ -10,6 +12,25 @@
 
 static const char* WINDOW_TITLE = "beatgrid";
 BGAME_VAR(bool, app_created) = false;
+BGAME_VAR(bgame_asset_bundle_t*, predefined_assets) = { 0 };
+
+static void
+load_assets(void) {
+	bgame_asset_init(&predefined_assets, bgame_default_allocator);
+	BGAME_FOREACH_DEFINED_ASSET(asset) {
+		// Optional tag filtering
+		bgame_asset_load_def(predefined_assets, asset);
+	}
+}
+
+static void
+report_allocator_stats(
+	const char* name,
+	bgame_allocator_stats_t stats,
+	void* userdata
+) {
+	BLOG_DEBUG("%s: Total %zu, Peak %zu", name, stats.total, stats.peak);
+}
 
 static void
 init(int argc, const char** argv) {
@@ -27,6 +48,11 @@ init(int argc, const char** argv) {
 			abort();
 		}
 
+		result = cf_fs_mount("./assets", "/assets", true);
+		if (result.code != CF_RESULT_SUCCESS) {
+			BLOG_WARN("Could not mount %s: %s", ".", result.details);
+		}
+
 		cf_app_init_imgui();
 		app_created = true;
 	}
@@ -34,6 +60,8 @@ init(int argc, const char** argv) {
 	cf_set_fixed_timestep(60);
 	cf_app_set_vsync(true);
 	cf_app_set_title(WINDOW_TITLE);
+
+	load_assets();
 
 	if (bgame_current_scene() == NULL) {
 		bgame_push_scene("main");
@@ -57,6 +85,15 @@ static void
 cleanup(void) {
 	bgame_clear_scene_stack();
 	cf_destroy_app();
+
+	BLOG_DEBUG("--- Allocator stats ---");
+	bgame_enumerate_tracked_allocators(report_allocator_stats, NULL);
+}
+
+static void
+after_reload(void) {
+	load_assets();
+	bgame_scene_after_reload();
 }
 
 static bgame_app_t app = {
@@ -64,7 +101,7 @@ static bgame_app_t app = {
 	.cleanup = cleanup,
 	.update = update,
 	.before_reload = bgame_scene_before_reload,
-	.after_reload = bgame_scene_after_reload,
+	.after_reload = after_reload,
 };
 
 BGAME_ENTRYPOINT(app)

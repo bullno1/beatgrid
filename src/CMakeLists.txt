@@ -1,6 +1,7 @@
 set(SOURCES
 	"main.c"
 	"grid.c"
+	"assets.c"
 
 	"scenes/main.c"
 

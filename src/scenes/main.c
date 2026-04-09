@@ -2,8 +2,11 @@
 #include <bgame/scene.h>
 #include <bgame/allocator/tracked.h>
 #include <bgame/reloadable.h>
+#include <bgame/ui.h>
+#include <bgame/utils.h>
 #include <cute.h>
 #include <blog.h>
+#include "../assets.h"
 #include <SDL3/SDL_audio.h>
 #include "../grid.h"
 #include "../tribuf.h"
@@ -14,6 +17,11 @@ static float KEY_REPEAT = 0.1f;
 static float KEY_BUFFER = 0.00f;
 static float CURSOR_MOVE_SPEED = 30.f;
 static float MOUSE_THRESHOLD = 0.001f;
+
+enum {
+	FONT_DEFAULT,
+	FONT_GRID,
+};
 
 typedef struct {
 	bg_grid_params_t grid_params;
@@ -171,6 +179,8 @@ init(void) {
 	cf_button_binding_add_key(btn_play_pause  , CF_KEY_SPACE);
 
 	cf_input_enable_ime();
+
+	bgame_register_ui_font(FONT_GRID, font_grid->name);
 }
 
 static void
@@ -328,6 +338,7 @@ update(void) {
 // }}}
 
 // Grid render {{{
+	// Grid
 
 	// Symbols
 	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
@@ -337,24 +348,50 @@ update(void) {
 		if (node == NULL) { continue; }
 	}
 
-	cf_push_text_effect_active(false);
-	cf_push_font_size(GRID_SIZE);
-	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
-		bg_pos_t pos = grid.keys[i];
-		cf_push_text_id(bhash_hash(&pos, sizeof(pos)));
+	BGAME_SCOPE(cf_push_text_effect_active(false), cf_pop_text_effect_active())
+	BGAME_SCOPE(cf_push_font_size(GRID_SIZE), cf_pop_font_size())
+	BGAME_SCOPE(cf_push_font(font_grid->name), cf_pop_font())
+	{
+		for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
+			bg_pos_t pos = grid.keys[i];
+			cf_push_text_id(bhash_hash(&pos, sizeof(pos)));
 
-		char text_buf[2] = { grid.values[i] };
-		CF_V2 text_size = cf_text_size(text_buf, 1);
-		CF_V2 text_pos = grid_pos_to_world(pos);
-		text_pos.x -= text_size.x * 0.5f;
-		text_pos.y += text_size.y * 0.5f;
+			bg_sym_t symbol = grid.values[i];
 
-		cf_draw_text(text_buf, text_pos, 1);
+			char text_buf[2] = { symbol };
+			CF_V2 text_size = cf_text_size(text_buf, 1);
+			CF_V2 text_pos = grid_pos_to_world(pos);
+			text_pos.x -= text_size.x * 0.5f;
+			text_pos.y += text_size.y * 0.5f;
 
-		cf_pop_text_id();
+			CF_Color color = cf_make_color_rgb(0, 102, 34);
+			bool glow = false;
+			if (('0' < symbol && symbol < '9') || ('a' < symbol && symbol < 'z')) {
+				color = cf_make_color_rgb(0, 255, 65);
+			} else if (bhash_has(&node_registry, symbol)) {
+				color = cf_make_color_rgb(255, 255, 255);
+				glow = true;
+			}
+
+			if (glow) {
+				BGAME_SCOPE(cf_push_font_blur(10), cf_pop_font_blur())
+				{
+					CF_V2 glow_pos = {
+						.x = text_pos.x - 10.f,
+						.y = text_pos.y + 10.f,
+					};
+					cf_draw_text(text_buf, glow_pos, 1);
+				}
+			}
+
+			BGAME_SCOPE(cf_draw_push_color(color), cf_draw_pop_color())
+			{
+				cf_draw_text(text_buf, text_pos, 1);
+			}
+
+			cf_pop_text_id();
+		}
 	}
-	cf_pop_font_size();
-	cf_pop_text_effect_active();
 
 	// Cursor
 	CF_V2 cursor_target = grid_pos_to_world(cursor_pos);

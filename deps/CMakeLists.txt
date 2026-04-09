@@ -24,3 +24,7 @@ target_include_directories(remodule INTERFACE remodule)
 # --- blibs --
 add_library(blibs INTERFACE)
 target_include_directories(blibs INTERFACE blibs)
+
+# --- clay ---
+add_library(clay INTERFACE)
+target_include_directories(clay INTERFACE clay)

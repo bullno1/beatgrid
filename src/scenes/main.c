@@ -279,6 +279,8 @@ send_audio_state(void) {
 
 static void
 grid_element(const Clay_RenderCommand* command, void* userdata) {
+	const CF_V2 text_size = cf_text_size("X", 1);
+
 	BGAME_SCOPE(cf_draw_push(), cf_draw_pop())
 	BGAME_SCOPE(cf_push_text_effect_active(false), cf_pop_text_effect_active())
 	BGAME_SCOPE(cf_push_font_size(GRID_SIZE), cf_pop_font_size())
@@ -293,7 +295,6 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 			bg_sym_t symbol = grid.values[i];
 
 			char text_buf[2] = { symbol, 0 };
-			CF_V2 text_size = cf_text_size(text_buf, 1);
 			CF_V2 text_pos = grid_pos_to_world(pos);
 			text_pos.x -= text_size.x * 0.5f;
 			text_pos.y += text_size.y * 0.5f;

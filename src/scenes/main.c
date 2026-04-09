@@ -337,6 +337,9 @@ update(void) {
 
 // }}}
 
+// Overlay {{{
+// }}}
+
 // Grid render {{{
 	// Grid
 
@@ -358,7 +361,7 @@ update(void) {
 
 			bg_sym_t symbol = grid.values[i];
 
-			char text_buf[2] = { symbol };
+			char text_buf[2] = { symbol, 0 };
 			CF_V2 text_size = cf_text_size(text_buf, 1);
 			CF_V2 text_pos = grid_pos_to_world(pos);
 			text_pos.x -= text_size.x * 0.5f;
@@ -366,7 +369,7 @@ update(void) {
 
 			CF_Color color = cf_make_color_rgb(0, 102, 34);
 			bool glow = false;
-			if (('0' < symbol && symbol < '9') || ('a' < symbol && symbol < 'z')) {
+			if (('0' <= symbol && symbol <= '9') || ('a' <= symbol && symbol <= 'z')) {
 				color = cf_make_color_rgb(0, 255, 65);
 			} else if (bhash_has(&node_registry, symbol)) {
 				color = cf_make_color_rgb(255, 255, 255);

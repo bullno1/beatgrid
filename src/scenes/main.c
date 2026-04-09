@@ -12,6 +12,7 @@
 #include <SDL3/SDL_audio.h>
 #include "../grid.h"
 #include "../tribuf.h"
+#include "../spike_detector.h"
 
 static float GRID_SIZE = 20.f;
 static float KEY_DELAY = 0.2f;
@@ -59,6 +60,8 @@ SCENE_VAR(CF_ButtonBinding, btn_scroll_multiply)
 
 SCENE_VAR(bool, right_sidebar_enabled)
 
+SCENE_VAR(spike_detector_t, spike_detector)
+
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
 static bool
@@ -97,6 +100,8 @@ audio_callback(
 ) {
 	static float last_sample = 0.f;
 
+	spike_detector_begin(&spike_detector);
+
 	audio_cmd_t* cmd = tribuf_begin_recv(&audio_cmd_queue);
 	if (cmd != NULL) {
 		bg_pipeline_set_params(audio_pipeline, (bg_pipeline_params_t){
@@ -109,7 +114,7 @@ audio_callback(
 		tribuf_end_recv(&audio_cmd_queue);
 	}
 
-	int num_frames_needed = total_amount / sizeof(float);
+	int num_frames_needed = additional_amount / sizeof(float);
 	if (num_frames_needed > audio_buf_len) {
 		audio_buf = bgame_realloc(audio_buf, sizeof(float) * num_frames_needed, scene_allocator);
 		audio_buf_len = num_frames_needed;
@@ -127,6 +132,20 @@ audio_callback(
 	}
 
 	SDL_PutAudioStreamData(stream, audio_buf, additional_amount);
+
+	spike_detector_end(&spike_detector);
+}
+
+static void
+init_spike_detector(void) {
+	SDL_AudioSpec spec;
+	int num_frames;
+	SDL_GetAudioDeviceFormat(
+		SDL_GetAudioStreamDevice(audio_stream),
+		&spec,
+		&num_frames
+	);
+	spike_detector_init(&spike_detector, num_frames, spec.freq);
 }
 
 static void
@@ -169,6 +188,7 @@ init(void) {
 			audio_callback,
 			NULL
 		);
+		init_spike_detector();
 	}
 
 	if (bgame_current_scene_state() == BGAME_SCENE_REINITIALIZING) {
@@ -244,6 +264,7 @@ after_reload(void) {
 		.grid_params = pipeline_params.grid_params,
 	});
 
+	init_spike_detector();
 	SDL_SetAudioStreamGetCallback(audio_stream, audio_callback, NULL);
 }
 
@@ -449,6 +470,7 @@ update(void) {
 		playing = !playing;
 
 		if (playing) {
+			init_spike_detector();
 			SDL_ResumeAudioStreamDevice(audio_stream);
 		} else {
 			SDL_PauseAudioStreamDevice(audio_stream);
@@ -557,6 +579,7 @@ update(void) {
 					CLAY(CLAY_ID_LOCAL("Content"), {
 						.layout = {
 							.sizing = { CLAY_SIZING_FIXED(300), CLAY_SIZING_GROW(0) },
+							.layoutDirection = CLAY_TOP_TO_BOTTOM,
 						},
 					}) {
 					}
@@ -637,6 +660,16 @@ update(void) {
 					.fontSize = STATUS_BAR_FONT_SIZE,
 					.textColor = UI_TEXT_COLOR,
 				});
+			}
+
+			if (playing && spike_detector_check(&spike_detector)) {
+				STATUS_BOX(Warning) {
+					CLAY_TEXT(CLAY_STRING("!"), {
+						.fontId = FONT_CHROME,
+						.fontSize = STATUS_BAR_FONT_SIZE,
+						.textColor = UI_TEXT_COLOR,
+					});
+				}
 			}
 		}
 	}

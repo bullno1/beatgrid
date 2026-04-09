@@ -60,6 +60,7 @@ SCENE_VAR(CF_ButtonBinding, btn_cursor_left)
 SCENE_VAR(CF_ButtonBinding, btn_cursor_right)
 SCENE_VAR(CF_ButtonBinding, btn_del_sym)
 SCENE_VAR(CF_ButtonBinding, btn_play_pause)
+SCENE_VAR(CF_ButtonBinding, btn_scroll_multiply)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
@@ -87,6 +88,7 @@ destroy_bindings(void) {
 	cf_destroy_button_binding(btn_cursor_right);
 	cf_destroy_button_binding(btn_del_sym);
 	cf_destroy_button_binding(btn_play_pause);
+	cf_destroy_button_binding(btn_scroll_multiply);
 }
 
 static void SDLCALL
@@ -182,6 +184,7 @@ init(void) {
 	btn_cursor_right = cf_make_button_binding(0, KEY_BUFFER);
 	btn_del_sym      = cf_make_button_binding(0, KEY_BUFFER);
 	btn_play_pause   = cf_make_button_binding(0, KEY_BUFFER);
+	btn_scroll_multiply = cf_make_button_binding(0, KEY_BUFFER);
 
 	cf_button_binding_set_repeat(btn_cursor_up   , KEY_DELAY, KEY_REPEAT);
 	cf_button_binding_set_repeat(btn_cursor_down , KEY_DELAY, KEY_REPEAT);
@@ -195,6 +198,8 @@ init(void) {
 	cf_button_binding_add_key(btn_del_sym     , CF_KEY_BACKSPACE);
 	cf_button_binding_add_key(btn_del_sym     , CF_KEY_DELETE);
 	cf_button_binding_add_key(btn_play_pause  , CF_KEY_SPACE);
+	cf_button_binding_add_key(btn_scroll_multiply, CF_KEY_LSHIFT);
+	cf_button_binding_add_key(btn_scroll_multiply, CF_KEY_RSHIFT);
 
 	cf_input_enable_ime();
 
@@ -273,6 +278,9 @@ update(void) {
 
 	cf_app_update(fixed_update);
 
+	Clay_ElementData grid_info = Clay_GetElementData(CLAY_ID("Grid"));
+	bool grid_modified = false;
+
 	// Input {{{
 
 	// Cursor {{{
@@ -309,9 +317,17 @@ update(void) {
 	}
 
 	if (
-		cf_abs(cf_mouse_motion_x()) > MOUSE_THRESHOLD
-		||
-		cf_abs(cf_mouse_motion_y()) > MOUSE_THRESHOLD
+		(
+			cf_abs(cf_mouse_motion_x()) > MOUSE_THRESHOLD
+			||
+			cf_abs(cf_mouse_motion_y()) > MOUSE_THRESHOLD
+		)
+		&&
+		grid_info.found
+		&&
+		(grid_info.boundingBox.x <= cf_mouse_x() && cf_mouse_x() <= (grid_info.boundingBox.x + grid_info.boundingBox.width))
+		&&
+		(grid_info.boundingBox.y <= cf_mouse_y() && cf_mouse_y() <= (grid_info.boundingBox.y + grid_info.boundingBox.height))
 	) {
 		CF_V2 p = cf_screen_to_world(cf_v2((float)cf_mouse_x(), (float)cf_mouse_y()));
 		p = cf_div(p, cf_v2(GRID_SIZE, GRID_SIZE));
@@ -321,8 +337,6 @@ update(void) {
 	// }}}
 
 	// Edit {{{
-	bool grid_modified = false;
-
 	if (cf_button_binding_consume_press(btn_del_sym)) {
 		bg_grid_del(&grid, cursor_pos);
 		grid_modified = true;
@@ -336,11 +350,6 @@ update(void) {
 			bg_grid_put(&grid, cursor_pos, (bg_sym_t)codepoint);
 			grid_modified = true;
 		}
-	}
-
-	if (grid_modified) {
-		bg_pipeline_build(editor_pipeline, &node_registry, &grid);
-		send_audio_state();
 	}
 // }}}
 
@@ -375,10 +384,61 @@ update(void) {
 			.layoutDirection = CLAY_TOP_TO_BOTTOM,
 		},
 	}) {
+		// Menu bar {{{
+		const int MENU_BAR_FONT_SIZE = 16;
 		CLAY(CLAY_ID("Top"), {
-			.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+			.layout = {
+				.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+			},
+			.border = {
+				.color = UI_BORDER_COLOR,
+				.width = { .bottom = 1 },
+			},
+			.backgroundColor = { .a = 1.f },
 		}) {
+			const Clay_Color MENU_HOVER_COLOR = {
+				.r = 0.f, .g = 61.f / 255.f, .b = 15.f / 255.f, .a = 1.f,
+			};
+			const Clay_Color MENU_INACTIVE_COLOR = bgame_ui_color_from_cf(cf_make_color_rgb(0x04, 0x0c, 0x05));
+
+#define MENU_ENTRY(NAME) \
+			CLAY(CLAY_ID(#NAME), { \
+				.layout.padding = { .left = 5, .right = 5, .top = 5, .bottom = 5 }, \
+				.border = { \
+					.color = UI_BORDER_COLOR, \
+					.width = { .right = 1 }, \
+				}, \
+				.backgroundColor = Clay_Hovered() ? MENU_HOVER_COLOR : MENU_INACTIVE_COLOR, \
+			})
+
+			MENU_ENTRY(File) {
+				CLAY_TEXT(CLAY_STRING("FILE"), {
+					.fontId = FONT_CHROME,
+					.fontSize = MENU_BAR_FONT_SIZE,
+					.textColor = UI_TEXT_COLOR,
+					.textAlignment = CLAY_TEXT_ALIGN_CENTER,
+				});
+			}
+
+			MENU_ENTRY(Options) {
+				CLAY_TEXT(CLAY_STRING("OPTIONS"), {
+					.fontId = FONT_CHROME,
+					.fontSize = MENU_BAR_FONT_SIZE,
+					.textColor = UI_TEXT_COLOR,
+					.textAlignment = CLAY_TEXT_ALIGN_CENTER,
+				});
+			}
+
+			MENU_ENTRY(Help) {
+				CLAY_TEXT(CLAY_STRING("HELP"), {
+					.fontId = FONT_CHROME,
+					.fontSize = MENU_BAR_FONT_SIZE,
+					.textColor = UI_TEXT_COLOR,
+					.textAlignment = CLAY_TEXT_ALIGN_CENTER,
+				});
+			}
 		}
+		// }}}
 
 		CLAY(CLAY_ID("Mid"), {
 			.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
@@ -409,15 +469,7 @@ update(void) {
 #define STATUS_BOX(NAME) \
 			CLAY(CLAY_ID(#NAME), { \
 				.layout.padding = { .left = 5, .right = 5 }, \
-			}) \
-
-			STATUS_BOX(State) {
-				CLAY_TEXT(playing ? CLAY_STRING("PLAYING") : CLAY_STRING("PAUSED"), {
-					.fontId = FONT_CHROME,
-					.fontSize = STATUS_BAR_FONT_SIZE,
-					.textColor = UI_TEXT_COLOR,
-				});
-			}
+			})
 
 			STATUS_BOX(BPM) {
 				CLAY_TEXT(CLAY_STRING("BPM"), {
@@ -431,20 +483,18 @@ update(void) {
 					.fontSize = STATUS_BAR_FONT_SIZE,
 					.textColor = { .r = 0.f, .g = 245.f / 255.f, .b = 255.f / 255.f, .a = 1.f },
 				});
+
+				if (Clay_Hovered()) {
+					int multiplier = cf_button_binding_down(btn_scroll_multiply) ? 10 : 1;
+					pipeline_params.grid_params.bpm += cf_mouse_wheel_motion() * multiplier;
+					grid_modified = true;
+				}
 			}
 
 			bgame_ui_hspacer(CLAY_ID_LOCAL("Spacer"));
 
-			STATUS_BOX(CursorX) {
-				CLAY_TEXT(CLAY_STRING("X"), {
-					.fontId = FONT_CHROME,
-					.fontSize = STATUS_BAR_FONT_SIZE,
-					.textColor = UI_TEXT_COLOR,
-				});
-			}
-
-			STATUS_BOX(CursorY) {
-				CLAY_TEXT(CLAY_STRING("Y"), {
+			STATUS_BOX(State) {
+				CLAY_TEXT(playing ? CLAY_STRING("PLAYING") : CLAY_STRING("PAUSED"), {
 					.fontId = FONT_CHROME,
 					.fontSize = STATUS_BAR_FONT_SIZE,
 					.textColor = UI_TEXT_COLOR,
@@ -463,8 +513,6 @@ update(void) {
 	// }}}
 
 	// Grid render {{{
-
-	Clay_ElementData grid_info = Clay_GetElementData(CLAY_ID("Grid"));
 
 	// Symbols
 	BGAME_SCOPE(cf_draw_push_layer(LAYER_GRID), cf_draw_pop_layer())
@@ -553,6 +601,12 @@ update(void) {
 	}
 
 	// }}}
+
+
+	if (grid_modified) {
+		bg_pipeline_build(editor_pipeline, &node_registry, &grid);
+		send_audio_state();
+	}
 
 	cf_app_draw_onto_screen(true);
 }

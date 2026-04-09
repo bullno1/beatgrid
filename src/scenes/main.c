@@ -26,11 +26,6 @@ enum {
 	FONT_CHROME,
 };
 
-enum {
-	LAYER_GRID,
-	LAYER_OVERLAY,
-};
-
 typedef struct {
 	bg_grid_params_t grid_params;
 	bg_grid_t grid;
@@ -273,12 +268,116 @@ send_audio_state(void) {
 }
 
 static void
+grid_element(const Clay_RenderCommand* command, void* userdata) {
+	BGAME_SCOPE(cf_draw_push(), cf_draw_pop())
+	BGAME_SCOPE(cf_push_text_effect_active(false), cf_pop_text_effect_active())
+	BGAME_SCOPE(cf_push_font_size(GRID_SIZE), cf_pop_font_size())
+	BGAME_SCOPE(cf_push_font(font_grid->name), cf_pop_font())
+	{
+		cf_draw_translate(command->boundingBox.x, -command->boundingBox.y - command->boundingBox.height);
+
+		for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
+			bg_pos_t pos = grid.keys[i];
+			cf_push_text_id(bhash_hash(&pos, sizeof(pos)));
+
+			bg_sym_t symbol = grid.values[i];
+
+			char text_buf[2] = { symbol, 0 };
+			CF_V2 text_size = cf_text_size(text_buf, 1);
+			CF_V2 text_pos = grid_pos_to_world(pos);
+			text_pos.x -= text_size.x * 0.5f;
+			text_pos.y += text_size.y * 0.5f;
+
+			CF_Color color = cf_make_color_rgb(0, 102, 34);
+			bool glow = false;
+			if (('0' <= symbol && symbol <= '9') || ('a' <= symbol && symbol <= 'z')) {
+				color = cf_make_color_rgb(0, 255, 65);
+			} else if (bhash_has(&node_registry, symbol)) {
+				color = cf_make_color_rgb(255, 255, 255);
+				glow = true;
+			}
+
+			if (glow) {
+				BGAME_SCOPE(cf_push_font_blur(10), cf_pop_font_blur())
+				{
+					CF_V2 glow_pos = {
+						.x = text_pos.x - 10.f,
+						.y = text_pos.y + 10.f,
+					};
+					cf_draw_text(text_buf, glow_pos, 1);
+				}
+			}
+
+			BGAME_SCOPE(cf_draw_push_color(color), cf_draw_pop_color())
+			{
+				cf_draw_text(text_buf, text_pos, 1);
+			}
+
+			cf_pop_text_id();
+		}
+
+		// Cursor
+		CF_V2 cursor_target = grid_pos_to_world(cursor_pos);
+		CF_Aabb cursor_box = cf_make_aabb_pos_w_h(
+			cursor_target,
+			GRID_SIZE, GRID_SIZE
+		);
+		cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
+
+		cursor_smooth_pos = cf_add(
+			cursor_smooth_pos,
+			cf_mul(
+				cf_sub(cursor_target, cursor_smooth_pos),
+				(1 - cf_exp(- CURSOR_MOVE_SPEED * CF_DELTA_TIME))
+			)
+		);
+		CF_Aabb cursor_trail = cf_make_aabb_pos_w_h(
+			cursor_smooth_pos,
+			GRID_SIZE, GRID_SIZE
+		);
+		cf_draw_push_color(cf_make_color_rgba(255, 255, 255, 200));
+		cf_draw_box_rounded(cursor_trail, 0.5f, 1.2f);
+		cf_draw_pop_color();
+
+		// I/O lines
+		int num_edges = bg_pipeline_count_edges(editor_pipeline);
+		const bg_edge_t* edges = bg_pipeline_get_edges(editor_pipeline);
+		for (int i = 0; i < num_edges; ++i) {
+			CF_V2 from_pos = grid_pos_to_world(edges[i].from);
+			CF_V2 to_pos   = grid_pos_to_world(edges[i].to);
+
+			if (
+				cf_contains_point(cursor_box, from_pos)
+				||
+				cf_contains_point(cursor_box, to_pos)
+			) {
+				cf_draw_line(from_pos, to_pos, 0.5f);
+			}
+		}
+
+		if (
+			Clay_PointerOver((Clay_ElementId){ .id = command->id })
+			&&
+			(
+				cf_abs(cf_mouse_motion_x()) > MOUSE_THRESHOLD
+				||
+				cf_abs(cf_mouse_motion_y()) > MOUSE_THRESHOLD
+			)
+		) {
+			CF_V2 p = cf_screen_to_world(cf_v2((float)cf_mouse_x(), (float)cf_mouse_y()));
+			p = cf_div(p, cf_v2(GRID_SIZE, GRID_SIZE));
+			cursor_pos.x = cf_round(p.x);
+			cursor_pos.y = cf_round(p.y);
+		}
+	}
+}
+
+static void
 update(void) {
 	tribuf_try_swap(&audio_cmd_queue);
 
 	cf_app_update(fixed_update);
 
-	Clay_ElementData grid_info = Clay_GetElementData(CLAY_ID("Grid"));
 	bool grid_modified = false;
 
 	// Input {{{
@@ -315,25 +414,6 @@ update(void) {
 	) {
 		cursor_pos.x += 1;
 	}
-
-	if (
-		(
-			cf_abs(cf_mouse_motion_x()) > MOUSE_THRESHOLD
-			||
-			cf_abs(cf_mouse_motion_y()) > MOUSE_THRESHOLD
-		)
-		&&
-		grid_info.found
-		&&
-		(grid_info.boundingBox.x <= cf_mouse_x() && cf_mouse_x() <= (grid_info.boundingBox.x + grid_info.boundingBox.width))
-		&&
-		(grid_info.boundingBox.y <= cf_mouse_y() && cf_mouse_y() <= (grid_info.boundingBox.y + grid_info.boundingBox.height))
-	) {
-		CF_V2 p = cf_screen_to_world(cf_v2((float)cf_mouse_x(), (float)cf_mouse_y()));
-		p = cf_div(p, cf_v2(GRID_SIZE, GRID_SIZE));
-		cursor_pos.x = cf_round(p.x);
-		cursor_pos.y = cf_round(p.y);
-	}
 	// }}}
 
 	// Edit {{{
@@ -351,7 +431,7 @@ update(void) {
 			grid_modified = true;
 		}
 	}
-// }}}
+	// }}}
 
 	// Control {{{
 	if (cf_button_binding_consume_press(btn_play_pause)) {
@@ -371,7 +451,7 @@ update(void) {
 
 	// }}}
 
-	// Overlay {{{
+	// UI {{{
 
 	const Clay_Color UI_BORDER_COLOR = { .r = 0.f, .g = 64.f / 255.f, 26.f / 255.f, .a = 1.f };
 	const Clay_Color UI_TEXT_COLOR = { .r = 0.f, .g = 255.f / 255.f, 65.f / 255.f, .a = 1.f };
@@ -440,14 +520,22 @@ update(void) {
 		}
 		// }}}
 
+		// Main {{{
 		CLAY(CLAY_ID("Mid"), {
 			.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
 		}) {
-			CLAY(CLAY_ID("Grid"), {
+			CLAY(CLAY_ID("GridContainer"), {
 				.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+				.clip = { .vertical = true, .horizontal = true }
 			}) {
+				CLAY(CLAY_ID("Grid"), {
+					.layout.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+					.custom = bgame_custom_ui_element(grid_element, NULL),
+				}) {
+				}
 			}
 		}
+		// }}}
 
 		// Status bar {{{
 		const int STATUS_BAR_FONT_SIZE = 15;
@@ -507,101 +595,7 @@ update(void) {
 	Clay_RenderCommandArray render_cmds = Clay_EndLayout(CF_DELTA_TIME);
 	// }}}
 
-	BGAME_SCOPE(cf_draw_push_layer(LAYER_OVERLAY), cf_draw_pop_layer()) {
-		bgame_render_ui(render_cmds);
-	}
-	// }}}
-
-	// Grid render {{{
-
-	// Symbols
-	BGAME_SCOPE(cf_draw_push_layer(LAYER_GRID), cf_draw_pop_layer())
-	BGAME_SCOPE(cf_push_text_effect_active(false), cf_pop_text_effect_active())
-	BGAME_SCOPE(cf_push_font_size(GRID_SIZE), cf_pop_font_size())
-	BGAME_SCOPE(cf_push_font(font_grid->name), cf_pop_font())
-	{
-		for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
-			bg_pos_t pos = grid.keys[i];
-			cf_push_text_id(bhash_hash(&pos, sizeof(pos)));
-
-			bg_sym_t symbol = grid.values[i];
-
-			char text_buf[2] = { symbol, 0 };
-			CF_V2 text_size = cf_text_size(text_buf, 1);
-			CF_V2 text_pos = grid_pos_to_world(pos);
-			text_pos.x -= text_size.x * 0.5f;
-			text_pos.y += text_size.y * 0.5f;
-
-			CF_Color color = cf_make_color_rgb(0, 102, 34);
-			bool glow = false;
-			if (('0' <= symbol && symbol <= '9') || ('a' <= symbol && symbol <= 'z')) {
-				color = cf_make_color_rgb(0, 255, 65);
-			} else if (bhash_has(&node_registry, symbol)) {
-				color = cf_make_color_rgb(255, 255, 255);
-				glow = true;
-			}
-
-			if (glow) {
-				BGAME_SCOPE(cf_push_font_blur(10), cf_pop_font_blur())
-				{
-					CF_V2 glow_pos = {
-						.x = text_pos.x - 10.f,
-						.y = text_pos.y + 10.f,
-					};
-					cf_draw_text(text_buf, glow_pos, 1);
-				}
-			}
-
-			BGAME_SCOPE(cf_draw_push_color(color), cf_draw_pop_color())
-			{
-				cf_draw_text(text_buf, text_pos, 1);
-			}
-
-			cf_pop_text_id();
-		}
-	}
-
-	// Cursor
-	CF_V2 cursor_target = grid_pos_to_world(cursor_pos);
-	CF_Aabb cursor_box = cf_make_aabb_pos_w_h(
-		cursor_target,
-		GRID_SIZE, GRID_SIZE
-	);
-	cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
-
-	cursor_smooth_pos = cf_add(
-		cursor_smooth_pos,
-		cf_mul(
-			cf_sub(cursor_target, cursor_smooth_pos),
-			(1 - cf_exp(- CURSOR_MOVE_SPEED * CF_DELTA_TIME))
-		)
-	);
-	CF_Aabb cursor_trail = cf_make_aabb_pos_w_h(
-		cursor_smooth_pos,
-		GRID_SIZE, GRID_SIZE
-	);
-	cf_draw_push_color(cf_make_color_rgba(255, 255, 255, 200));
-	cf_draw_box_rounded(cursor_trail, 0.5f, 1.2f);
-	cf_draw_pop_color();
-
-	// I/O lines
-	int num_edges = bg_pipeline_count_edges(editor_pipeline);
-	const bg_edge_t* edges = bg_pipeline_get_edges(editor_pipeline);
-	for (int i = 0; i < num_edges; ++i) {
-		CF_V2 from_pos = grid_pos_to_world(edges[i].from);
-		CF_V2 to_pos   = grid_pos_to_world(edges[i].to);
-
-		if (
-			cf_contains_point(cursor_box, from_pos)
-			||
-			cf_contains_point(cursor_box, to_pos)
-		) {
-			cf_draw_line(from_pos, to_pos, 0.5f);
-		}
-	}
-
-	// }}}
-
+	bgame_render_ui(render_cmds);
 
 	if (grid_modified) {
 		bg_pipeline_build(editor_pipeline, &node_registry, &grid);

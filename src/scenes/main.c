@@ -494,8 +494,9 @@ update(void) {
 
 	// UI {{{
 
-	const Clay_Color UI_BORDER_COLOR = { .r = 0.f, .g = 64.f / 255.f, 26.f / 255.f, .a = 1.f };
-	const Clay_Color UI_TEXT_COLOR = { .r = 0.f, .g = 255.f / 255.f, 65.f / 255.f, .a = 1.f };
+	const Clay_Color UI_BORDER_COLOR = bgame_ui_color_rgb(0, 64, 26);
+	const Clay_Color UI_TEXT_COLOR = bgame_ui_color_rgb(0, 255, 65);
+	const Clay_Color UI_BACKGROUND_COLOR = bgame_ui_color_rgb(4, 12, 5);
 
 	bgame_update_ui();
 	Clay_BeginLayout();
@@ -515,12 +516,9 @@ update(void) {
 				.color = UI_BORDER_COLOR,
 				.width = { .bottom = 1 },
 			},
-			.backgroundColor = { .a = 1.f },
+			.backgroundColor = UI_BACKGROUND_COLOR,
 		}) {
-			const Clay_Color MENU_HOVER_COLOR = {
-				.r = 0.f, .g = 61.f / 255.f, .b = 15.f / 255.f, .a = 1.f,
-			};
-			const Clay_Color MENU_INACTIVE_COLOR = bgame_ui_color_from_cf(cf_make_color_rgb(0x04, 0x0c, 0x05));
+			const Clay_Color MENU_HOVER_COLOR = bgame_ui_color_rgb(0, 61, 15);
 
 #define MENU_ENTRY(NAME) \
 			CLAY(CLAY_ID(#NAME), { \
@@ -529,7 +527,7 @@ update(void) {
 					.color = UI_BORDER_COLOR, \
 					.width = { .right = 1 }, \
 				}, \
-				.backgroundColor = Clay_Hovered() ? MENU_HOVER_COLOR : MENU_INACTIVE_COLOR, \
+				.backgroundColor = Clay_Hovered() ? MENU_HOVER_COLOR : UI_BACKGROUND_COLOR, \
 			})
 
 			MENU_ENTRY(File) {
@@ -582,6 +580,7 @@ update(void) {
 					.color = UI_BORDER_COLOR,
 					.width = CLAY_BORDER_ALL(1)
 				},
+				.backgroundColor = UI_BACKGROUND_COLOR,
 			}) {
 				if (right_sidebar_enabled) {
 					bhash_index_t num_nodes = bhash_len(&node_registry);
@@ -597,6 +596,10 @@ update(void) {
 						.layout = {
 							.sizing = { CLAY_SIZING_FIXED(300), CLAY_SIZING_GROW(0) },
 							.layoutDirection = CLAY_TOP_TO_BOTTOM,
+						},
+						.clip = {
+							.vertical = true,
+							.childOffset = Clay_GetScrollOffset(),
 						},
 					}) {
 						const char* last_category = "";
@@ -635,24 +638,14 @@ update(void) {
 										.padding.bottom = 3,
 									},
 									.border = {
-										.color = {
-											.r = 136.f / 255.f,
-											.g = 0.f,
-											.b = 85.f / 255.f,
-											.a = 1.f,
-										},
+										.color = bgame_ui_color_rgb(136, 0, 85),
 										.width.bottom = 1,
 									},
 								}) {
 									CLAY_TEXT(clay_category, {
 										.fontId = FONT_CHROME,
 										.fontSize = MENU_BAR_FONT_SIZE,
-										.textColor = {
-											.r = 255.f / 255.f,
-											.g = 0.f,
-											.b = 160.f / 255.f,
-											.a = 1.f,
-										},
+										.textColor = bgame_ui_color_rgb(255, 0, 160),
 									});
 								}
 							}
@@ -673,12 +666,7 @@ update(void) {
 									CLAY_TEXT(((Clay_String){ .chars = &node->symbol, .length = 1 }), {
 										.fontId = FONT_CHROME,
 										.fontSize = 24,
-										.textColor = {
-											.r = 0.f / 255.f,
-											.g = 245.f / 255.f,
-											.b = 255.f / 255.f,
-											.a = 1.f,
-										},
+										.textColor = bgame_ui_color_rgb(0, 245, 255),
 									});
 								}
 
@@ -689,26 +677,29 @@ update(void) {
 										.layoutDirection = CLAY_TOP_TO_BOTTOM,
 									},
 								}) {
-									CLAY_TEXT(((Clay_String){ .chars = node->title, .length = strlen(node->title) }), {
-										.fontId = FONT_CHROME,
-										.fontSize = 13,
-										.textColor = {
-											.r = 0.f / 255.f,
-											.g = 255.f / 255.f,
-											.b = 65.f / 255.f,
-											.a = 1.f,
-										},
-									});
-									CLAY_TEXT(((Clay_String){ .chars = node->description, .length = strlen(node->description) }), {
-										.fontId = FONT_CHROME,
-										.fontSize = 13,
-										.textColor = {
-											.r = 7.f / 255.f,
-											.g = 184.f / 255.f,
-											.b = 66.f / 255.f,
-											.a = 1.f,
-										},
-									});
+									CLAY(CLAY_ID_LOCAL("Title"), {
+										.layout = {
+											.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_FIT(0) },
+										}
+									}) {
+										CLAY_TEXT(((Clay_String){ .chars = node->title, .length = strlen(node->title) }), {
+											.fontId = FONT_CHROME,
+											.fontSize = 13,
+											.textColor = bgame_ui_color_rgb(0, 255, 65),
+										});
+									}
+
+									CLAY(CLAY_ID_LOCAL("Description"), {
+										.layout = {
+											.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_FIT(0) },
+										}
+									}) {
+										CLAY_TEXT(((Clay_String){ .chars = node->description, .length = strlen(node->description) }), {
+											.fontId = FONT_CHROME,
+											.fontSize = 13,
+											.textColor = bgame_ui_color_rgb(7, 184, 66),
+										});
+									}
 								}
 							}
 						}
@@ -756,7 +747,7 @@ update(void) {
 				.color = UI_BORDER_COLOR,
 				.width = CLAY_BORDER_ALL(1),
 			},
-			.backgroundColor = { .a = 1.f },
+			.backgroundColor = UI_BACKGROUND_COLOR,
 		}) {
 
 #define STATUS_BOX(NAME) \
@@ -774,7 +765,7 @@ update(void) {
 				CLAY_TEXT(bgame_ui_string("%d", pipeline_params.grid_params.bpm), {
 					.fontId = FONT_CHROME,
 					.fontSize = STATUS_BAR_FONT_SIZE,
-					.textColor = { .r = 0.f, .g = 245.f / 255.f, .b = 255.f / 255.f, .a = 1.f },
+					.textColor = bgame_ui_color_rgb(0, 245, 255),
 				});
 
 				if (Clay_Hovered()) {

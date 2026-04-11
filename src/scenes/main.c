@@ -505,7 +505,21 @@ update(void) {
 	const Clay_Color UI_BORDER_COLOR = bgame_ui_color_rgb(0, 64, 26);
 	const Clay_Color UI_TEXT_COLOR = bgame_ui_color_rgb(0, 255, 65);
 	const Clay_Color UI_BACKGROUND_COLOR = bgame_ui_color_rgb(4, 12, 5);
+	const Clay_Color UI_HOVER_COLOR = bgame_ui_color_rgb(0, 61, 15);
 	const float UI_TRANSITION_DURATION = 0.2f;
+
+	Clay_TransitionElementConfig transition_common = {
+		.duration = UI_TRANSITION_DURATION,
+		.handler = bgame_ui_transition,
+		.userData = bgame_make_frame_copy(((bgame_ui_transition_config_t){
+			.curve = cf_sin_in_out,
+		})),
+		.properties =
+			  CLAY_TRANSITION_PROPERTY_POSITION
+			| CLAY_TRANSITION_PROPERTY_BACKGROUND_COLOR
+			| CLAY_TRANSITION_PROPERTY_OVERLAY_COLOR
+			,
+	};
 
 	bgame_update_ui();
 	Clay_BeginLayout();
@@ -527,8 +541,6 @@ update(void) {
 			},
 			.backgroundColor = UI_BACKGROUND_COLOR,
 		}) {
-			const Clay_Color MENU_HOVER_COLOR = bgame_ui_color_rgb(0, 61, 15);
-
 #define MENU_ENTRY(NAME) \
 			CLAY(CLAY_ID(#NAME), { \
 				.layout.padding = { .left = 5, .right = 5, .top = 5, .bottom = 5 }, \
@@ -536,7 +548,8 @@ update(void) {
 					.color = UI_BORDER_COLOR, \
 					.width = { .right = 1 }, \
 				}, \
-				.backgroundColor = Clay_Hovered() ? MENU_HOVER_COLOR : UI_BACKGROUND_COLOR, \
+				.backgroundColor = Clay_Hovered() ? UI_HOVER_COLOR : UI_BACKGROUND_COLOR, \
+				.transition = transition_common, \
 			})
 
 			MENU_ENTRY(File) {
@@ -590,16 +603,7 @@ update(void) {
 					.width = CLAY_BORDER_ALL(1)
 				},
 				.backgroundColor = UI_BACKGROUND_COLOR,
-				.transition = {
-					.duration = UI_TRANSITION_DURATION,
-					.handler = bgame_ui_transition,
-					.userData = bgame_make_frame_copy(((bgame_ui_transition_config_t){
-						.curve = cf_sin_in_out,
-					})),
-					.enter.setInitialState = slide_right,
-					.exit.setFinalState = slide_right,
-					.properties = CLAY_TRANSITION_PROPERTY_POSITION,
-				},
+				.transition = transition_common,
 			}) {
 				CLAY(CLAY_ID_LOCAL("PullTab"), {
 					.layout = {
@@ -608,6 +612,8 @@ update(void) {
 						.childAlignment.y = CLAY_ALIGN_Y_CENTER,
 						.padding = { .left = 1, .right = 1 },
 					},
+					.transition = transition_common,
+					.backgroundColor = Clay_Hovered() ? UI_HOVER_COLOR : UI_BACKGROUND_COLOR, \
 				}) {
 					CLAY_TEXT(right_sidebar_enabled ? CLAY_STRING(">") : CLAY_STRING("<"), {
 						.fontId = FONT_CHROME,

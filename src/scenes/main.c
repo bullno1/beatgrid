@@ -417,6 +417,10 @@ static Clay_TransitionData
 slide_right(Clay_TransitionData targetState, Clay_TransitionProperty properties) {
 	Clay_TransitionData target = targetState;
 	target.boundingBox.x += target.boundingBox.width;
+	target.overlayColor.r = 0.01f;
+	target.overlayColor.g = 0.01f;
+	target.overlayColor.b = 0.01f;
+	target.overlayColor.a = 0.01f;
 	return target;
 }
 
@@ -506,7 +510,7 @@ update(void) {
 	const Clay_Color UI_TEXT_COLOR = bgame_ui_color_rgb(0, 255, 65);
 	const Clay_Color UI_BACKGROUND_COLOR = bgame_ui_color_rgb(4, 12, 5);
 	const Clay_Color UI_HOVER_COLOR = bgame_ui_color_rgb(0, 61, 15);
-	const float UI_TRANSITION_DURATION = 0.2f;
+	const float UI_TRANSITION_DURATION = 0.25f;
 
 	Clay_TransitionElementConfig transition_common = {
 		.duration = UI_TRANSITION_DURATION,
@@ -648,6 +652,7 @@ update(void) {
 							.vertical = true,
 							.childOffset = Clay_GetScrollOffset(),
 						},
+						.overlayColor = bgame_ui_color_from_cf(cf_color_white()),
 						.transition = {
 							.duration = UI_TRANSITION_DURATION,
 							.handler = bgame_ui_transition,
@@ -656,7 +661,7 @@ update(void) {
 							})),
 							.enter.setInitialState = slide_right,
 							.exit.setFinalState = slide_right,
-							.properties = CLAY_TRANSITION_PROPERTY_POSITION,
+							.properties = CLAY_TRANSITION_PROPERTY_POSITION | CLAY_TRANSITION_PROPERTY_OVERLAY_COLOR,
 						},
 					}) {
 						const char* last_category = "";

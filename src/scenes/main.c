@@ -677,29 +677,17 @@ update(void) {
 										.layoutDirection = CLAY_TOP_TO_BOTTOM,
 									},
 								}) {
-									CLAY(CLAY_ID_LOCAL("Title"), {
-										.layout = {
-											.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_FIT(0) },
-										}
-									}) {
-										CLAY_TEXT(((Clay_String){ .chars = node->title, .length = strlen(node->title) }), {
-											.fontId = FONT_CHROME,
-											.fontSize = 13,
-											.textColor = bgame_ui_color_rgb(0, 255, 65),
-										});
-									}
+									CLAY_TEXT(((Clay_String){ .chars = node->title, .length = strlen(node->title) }), {
+										.fontId = FONT_CHROME,
+										.fontSize = 13,
+										.textColor = bgame_ui_color_rgb(0, 255, 65),
+									});
 
-									CLAY(CLAY_ID_LOCAL("Description"), {
-										.layout = {
-											.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_FIT(0) },
-										}
-									}) {
-										CLAY_TEXT(((Clay_String){ .chars = node->description, .length = strlen(node->description) }), {
-											.fontId = FONT_CHROME,
-											.fontSize = 13,
-											.textColor = bgame_ui_color_rgb(7, 184, 66),
-										});
-									}
+									CLAY_TEXT(((Clay_String){ .chars = node->description, .length = strlen(node->description) }), {
+										.fontId = FONT_CHROME,
+										.fontSize = 13,
+										.textColor = bgame_ui_color_rgb(7, 184, 66),
+									});
 								}
 							}
 						}
@@ -799,9 +787,9 @@ update(void) {
 	// }}}
 
 	Clay_RenderCommandArray render_cmds = Clay_EndLayout(CF_DELTA_TIME);
-	// }}}
-
 	bgame_render_ui(render_cmds);
+
+	// }}}
 
 	if (grid_modified) {
 		bg_pipeline_build(editor_pipeline, &node_registry, &grid);

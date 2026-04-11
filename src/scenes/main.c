@@ -15,7 +15,7 @@
 #include "../tribuf.h"
 #include "../spike_detector.h"
 
-static float GRID_SIZE = 20.f;
+static float GRID_SIZE = 24.f;
 static float KEY_DELAY = 0.2f;
 static float KEY_REPEAT = 0.1f;
 static float KEY_BUFFER = 0.00f;
@@ -299,17 +299,84 @@ send_audio_state(void) {
 	tribuf_end_send(&audio_cmd_queue);
 }
 
+// Grid {{{
+
+static const int LIGHT_RADIUS = 10;
+
+static float
+grid_element_alpha(bg_pos_t pos, bg_pos_t cursor) {
+	float distance = cf_distance(cf_v2(cursor_pos.x, cursor_pos.y), cf_v2(pos.x, pos.y));
+	if (distance > LIGHT_RADIUS) {
+		return 0.f;
+	} else {
+		return 1.f - distance / (float)LIGHT_RADIUS;
+	}
+}
+
 static void
 grid_element(const Clay_RenderCommand* command, void* userdata) {
-	const CF_V2 text_size = cf_text_size("X", 1);
+	const int LIGHT_RADIUS = 10;
 
 	BGAME_SCOPE(cf_draw_push(), cf_draw_pop())
 	BGAME_SCOPE(cf_push_text_effect_active(false), cf_pop_text_effect_active())
 	BGAME_SCOPE(cf_push_font_size(GRID_SIZE), cf_pop_font_size())
 	BGAME_SCOPE(cf_push_font(font_grid->name), cf_pop_font())
 	{
+		const CF_V2 text_size = cf_text_size("X", 1);
+
 		cf_draw_translate(command->boundingBox.x, -command->boundingBox.y - command->boundingBox.height);
 
+		// Grid
+		for (int x = cursor_pos.x - LIGHT_RADIUS; x <= cursor_pos.x + LIGHT_RADIUS; ++x) {
+			for (int y = cursor_pos.y - LIGHT_RADIUS; y <= cursor_pos.y + LIGHT_RADIUS; ++y) {
+				bg_pos_t pos = { x, y };
+				if (bhash_has(&grid, pos)) { continue; }
+
+				float distance = cf_distance(cf_v2(cursor_pos.x, cursor_pos.y), cf_v2(x, y));
+				if (distance > LIGHT_RADIUS) { continue; }
+
+				float alpha = grid_element_alpha((bg_pos_t){ x, y }, cursor_pos);
+				if (alpha == 0.f) { continue; }
+
+				CF_V2 grid_center = grid_pos_to_world(pos);
+				cf_draw_push_color(cf_make_color_rgba_f(1.f, 1.f, 1.f, alpha));
+				cf_draw_circle_fill2(grid_center, 0.2f);
+				cf_draw_pop_color();
+			}
+		}
+
+		// I/O lines
+		int num_edges = bg_pipeline_count_edges(editor_pipeline);
+		const bg_edge_t* edges = bg_pipeline_get_edges(editor_pipeline);
+		for (int i = 0; i < num_edges; ++i) {
+			float alpha = cf_max(
+				grid_element_alpha(edges[i].from, cursor_pos),
+				grid_element_alpha(edges[i].to  , cursor_pos)
+			);
+			CF_V2 from_pos = grid_pos_to_world(edges[i].from);
+			CF_V2 to_pos   = grid_pos_to_world(edges[i].to);
+
+			int bpm = playing ? pipeline_params.grid_params.bpm : 20;
+			float beat_duration = 60.0f / (float)bpm;
+			float lerp_factor = fmodf(CF_SECONDS, beat_duration) / beat_duration;
+			CF_V2 particle_pos = cf_lerp(from_pos, to_pos, lerp_factor);
+
+			if (playing) {
+				cf_draw_circle_fill2(particle_pos, 1.2f);
+			} else if (alpha > 0.f) {
+				cf_draw_push_color(cf_make_color_rgba_f(1.f, 1.f, 1.f, alpha));
+				cf_draw_circle_fill2(particle_pos, 1.f);
+				cf_draw_pop_color();
+			}
+
+			if (alpha == 0.f) { continue; }
+
+			cf_draw_push_color(cf_make_color_rgba_f(1.f, 1.f, 1.f, alpha * 0.8f));
+			cf_draw_line(from_pos, to_pos, 0.5f);
+			cf_draw_pop_color();
+		}
+
+		// Symbols
 		for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
 			bg_pos_t pos = grid.keys[i];
 			cf_push_text_id(bhash_hash(&pos, sizeof(pos)));
@@ -318,6 +385,7 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 
 			char text_buf[2] = { symbol, 0 };
 			CF_V2 text_pos = grid_pos_to_world(pos);
+			CF_V2 glow_pos = text_pos;
 			text_pos.x -= text_size.x * 0.5f;
 			text_pos.y += text_size.y * 0.5f;
 
@@ -326,18 +394,18 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 			if (('0' <= symbol && symbol <= '9') || ('a' <= symbol && symbol <= 'z')) {
 				color = cf_make_color_rgb(0, 255, 65);
 			} else if (bhash_has(&node_registry, symbol)) {
-				color = cf_make_color_rgb(255, 255, 255);
+				color = cf_make_color_rgb(0, 245, 255);
 				glow = true;
 			}
 
-			if (glow) {
-				BGAME_SCOPE(cf_push_font_blur(10), cf_pop_font_blur())
+			float alpha = grid_element_alpha(pos, cursor_pos);
+			if (glow && alpha > 0.f) {
+				BGAME_SCOPE(
+					cf_draw_push_color(cf_make_color_rgba_f(0.f, 0.f, 0.f, alpha)),
+					cf_draw_pop_color()
+				)
 				{
-					CF_V2 glow_pos = {
-						.x = text_pos.x - 10.f,
-						.y = text_pos.y + 10.f,
-					};
-					cf_draw_text(text_buf, glow_pos, 1);
+					cf_draw_circle_fill2(glow_pos, GRID_SIZE * 0.25f);
 				}
 			}
 
@@ -372,30 +440,10 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 		cf_draw_box_rounded(cursor_trail, 0.5f, 1.2f);
 		cf_draw_pop_color();
 
-		// I/O lines
-		int num_edges = bg_pipeline_count_edges(editor_pipeline);
-		const bg_edge_t* edges = bg_pipeline_get_edges(editor_pipeline);
-		for (int i = 0; i < num_edges; ++i) {
-			CF_V2 from_pos = grid_pos_to_world(edges[i].from);
-			CF_V2 to_pos   = grid_pos_to_world(edges[i].to);
-
-			if (
-				cf_contains_point(cursor_box, from_pos)
-				||
-				cf_contains_point(cursor_box, to_pos)
-			) {
-				cf_draw_line(from_pos, to_pos, 0.5f);
-			}
-		}
-
 		if (
 			Clay_PointerOver((Clay_ElementId){ .id = command->id })
 			&&
-			(
-				cf_abs(cf_mouse_motion_x()) > MOUSE_THRESHOLD
-				||
-				cf_abs(cf_mouse_motion_y()) > MOUSE_THRESHOLD
-			)
+			cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)
 		) {
 			CF_V2 p = cf_screen_to_world(cf_v2((float)cf_mouse_x(), (float)cf_mouse_y()));
 			p = cf_div(p, cf_v2(GRID_SIZE, GRID_SIZE));
@@ -404,6 +452,8 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 		}
 	}
 }
+
+// }}}
 
 static int
 cmp_by_category(const void* lhs_v, const void* rhs_v) {
@@ -787,7 +837,7 @@ update(void) {
 			STATUS_BOX(BPM) {
 				bgame_ui_rich_text(CLAY_ID_LOCAL("Label"), (bgame_ui_rich_text_t){
 					.text = Clay_Hovered()
-						? bgame_fmt("<wave speed=%f span=3>BPM</wave>", CF_PI * pipeline_params.grid_params.bpm / 30.f)
+						? bgame_fmt("<wave speed=%f span=5>BPM</wave>", CF_PI * pipeline_params.grid_params.bpm / 30.f)
 						: "BPM",
 					.text_len = -1,
 					.font_id = FONT_CHROME,

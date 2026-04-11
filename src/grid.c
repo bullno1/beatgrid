@@ -360,8 +360,8 @@ bg_output_handle_t
 bg_node_get_output(bg_node_ctx_t* ctx, bg_output_desc_t desc) {
 	if (ctx->phase == BG_EVAL_PROBE) {
 		bg_edge_t edge = {
-			.from = desc.pos,
-			.to = ctx->pos,
+			.from = ctx->pos,
+			.to = desc.pos,
 		};
 		bg_edge_data_t edge_data = {
 			.is_input = false,

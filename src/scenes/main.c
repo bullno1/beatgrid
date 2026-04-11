@@ -5,6 +5,7 @@
 #include <bgame/ui.h>
 #include <bgame/ui/spacer.h>
 #include <bgame/ui/string.h>
+#include <bgame/ui/rich_text.h>
 #include <bgame/utils.h>
 #include <cute.h>
 #include <blog.h>
@@ -784,13 +785,18 @@ update(void) {
 			})
 
 			STATUS_BOX(BPM) {
-				CLAY_TEXT(CLAY_STRING("BPM"), {
-					.fontId = FONT_CHROME,
-					.fontSize = STATUS_BAR_FONT_SIZE,
-					.textColor = UI_TEXT_COLOR,
+				bgame_ui_rich_text(CLAY_ID_LOCAL("Label"), (bgame_ui_rich_text_t){
+					.text = Clay_Hovered()
+						? bgame_fmt("<wave speed=%f span=3>BPM</wave>", CF_PI * pipeline_params.grid_params.bpm / 30.f)
+						: "BPM",
+					.text_len = -1,
+					.font_id = FONT_CHROME,
+					.font_size = STATUS_BAR_FONT_SIZE,
+					.color = UI_TEXT_COLOR,
+					.sizing = BGAME_UI_RICH_TEXT_GROW,
 				});
 
-				CLAY_TEXT(bgame_ui_string("%d", pipeline_params.grid_params.bpm), {
+				CLAY_TEXT(bgame_ui_string("%3d", pipeline_params.grid_params.bpm), {
 					.fontId = FONT_CHROME,
 					.fontSize = STATUS_BAR_FONT_SIZE,
 					.textColor = bgame_ui_color_rgb(0, 245, 255),
@@ -806,10 +812,15 @@ update(void) {
 			bgame_ui_hspacer(CLAY_ID_LOCAL("Spacer"));
 
 			STATUS_BOX(State) {
-				CLAY_TEXT(playing ? CLAY_STRING("PLAYING") : CLAY_STRING("PAUSED"), {
-					.fontId = FONT_CHROME,
-					.fontSize = STATUS_BAR_FONT_SIZE,
-					.textColor = UI_TEXT_COLOR,
+				bgame_ui_rich_text(CLAY_ID_LOCAL("Label"), (bgame_ui_rich_text_t){
+					.text = playing
+						? bgame_fmt("<wave speed=%f>PLAYING</wave>", CF_PI * pipeline_params.grid_params.bpm / 30.f)
+						: "PAUSED",
+					.text_len = -1,
+					.font_id = FONT_CHROME,
+					.font_size = STATUS_BAR_FONT_SIZE,
+					.color = UI_TEXT_COLOR,
+					.sizing = BGAME_UI_RICH_TEXT_GROW,
 				});
 			}
 

@@ -412,6 +412,14 @@ cmp_by_category(const void* lhs_v, const void* rhs_v) {
 	return strcmp(lhs->category, rhs->category);
 }
 
+
+static Clay_TransitionData
+slide_right(Clay_TransitionData targetState, Clay_TransitionProperty properties) {
+	Clay_TransitionData target = targetState;
+	target.boundingBox.x += target.boundingBox.width;
+	return target;
+}
+
 static void
 update(void) {
 	tribuf_try_swap(&audio_cmd_queue);
@@ -497,6 +505,7 @@ update(void) {
 	const Clay_Color UI_BORDER_COLOR = bgame_ui_color_rgb(0, 64, 26);
 	const Clay_Color UI_TEXT_COLOR = bgame_ui_color_rgb(0, 255, 65);
 	const Clay_Color UI_BACKGROUND_COLOR = bgame_ui_color_rgb(4, 12, 5);
+	const float UI_TRANSITION_DURATION = 0.2f;
 
 	bgame_update_ui();
 	Clay_BeginLayout();
@@ -581,7 +590,39 @@ update(void) {
 					.width = CLAY_BORDER_ALL(1)
 				},
 				.backgroundColor = UI_BACKGROUND_COLOR,
+				.transition = {
+					.duration = UI_TRANSITION_DURATION,
+					.handler = bgame_ui_transition,
+					.userData = bgame_make_frame_copy(((bgame_ui_transition_config_t){
+						.curve = cf_sin_in_out,
+					})),
+					.enter.setInitialState = slide_right,
+					.exit.setFinalState = slide_right,
+					.properties = CLAY_TRANSITION_PROPERTY_POSITION,
+				},
 			}) {
+				CLAY(CLAY_ID_LOCAL("PullTab"), {
+					.layout = {
+						.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_GROW(0) },
+						.layoutDirection = CLAY_TOP_TO_BOTTOM,
+						.childAlignment.y = CLAY_ALIGN_Y_CENTER,
+						.padding = { .left = 1, .right = 1 },
+					},
+				}) {
+					CLAY_TEXT(right_sidebar_enabled ? CLAY_STRING(">") : CLAY_STRING("<"), {
+						.fontId = FONT_CHROME,
+						.fontSize = MENU_BAR_FONT_SIZE,
+						.textColor = UI_TEXT_COLOR,
+						.userData = bgame_ui_text_config((bgame_ui_text_config_t){
+							.effect = BGAME_UI_DISABLE_TEXT_EFFECT,
+						})
+					});
+
+					if (Clay_Hovered() && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
+						right_sidebar_enabled = !right_sidebar_enabled;
+					}
+				}
+
 				if (right_sidebar_enabled) {
 					bhash_index_t num_nodes = bhash_len(&node_registry);
 					const bg_node_t** node_types = bgame_alloc_for_frame(
@@ -600,6 +641,16 @@ update(void) {
 						.clip = {
 							.vertical = true,
 							.childOffset = Clay_GetScrollOffset(),
+						},
+						.transition = {
+							.duration = UI_TRANSITION_DURATION,
+							.handler = bgame_ui_transition,
+							.userData = bgame_make_frame_copy(((bgame_ui_transition_config_t){
+								.curve = cf_sin_in_out,
+							})),
+							.enter.setInitialState = slide_right,
+							.exit.setFinalState = slide_right,
+							.properties = CLAY_TRANSITION_PROPERTY_POSITION,
 						},
 					}) {
 						const char* last_category = "";
@@ -650,7 +701,7 @@ update(void) {
 								}
 							}
 
-							CLAY(CLAY_IDI_LOCAL("Item", i), {
+							CLAY(CLAY_SID_LOCAL(((Clay_String){ .chars = &node->symbol, .length = 1 })), {
 								.layout = {
 									.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
 									.padding = CLAY_PADDING_ALL(3),
@@ -693,28 +744,6 @@ update(void) {
 						}
 
 						Clay__CloseElement();
-					}
-				}
-
-				CLAY(CLAY_ID_LOCAL("PullTab"), {
-					.layout = {
-						.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_GROW(0) },
-						.layoutDirection = CLAY_TOP_TO_BOTTOM,
-						.childAlignment.y = CLAY_ALIGN_Y_CENTER,
-						.padding = { .left = 1, .right = 1 },
-					},
-				}) {
-					CLAY_TEXT(right_sidebar_enabled ? CLAY_STRING(">") : CLAY_STRING("<"), {
-						.fontId = FONT_CHROME,
-						.fontSize = MENU_BAR_FONT_SIZE,
-						.textColor = UI_TEXT_COLOR,
-						.userData = bgame_ui_text_config((bgame_ui_text_config_t){
-							.effect = BGAME_UI_DISABLE_TEXT_EFFECT,
-						})
-					});
-
-					if (Clay_Hovered() && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
-						right_sidebar_enabled = !right_sidebar_enabled;
 					}
 				}
 			}

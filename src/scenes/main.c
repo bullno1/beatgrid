@@ -197,18 +197,164 @@ static void
 fixed_update(void* userdata) {
 }
 
-static CF_V2
-grid_pos_to_world(bg_pos_t grid_pos) {
-	return cf_mul(cf_v2(grid_pos.x, grid_pos.y), GRID_SIZE);
+static int
+cmp_by_category(const void* lhs_v, const void* rhs_v) {
+	const bg_node_t* lhs = *(const bg_node_t**)lhs_v;
+	const bg_node_t* rhs = *(const bg_node_t**)rhs_v;
+
+	return strcmp(lhs->category, rhs->category);
 }
 
-static bg_pos_t
-world_pos_to_grid_pos(CF_V2 world_pos) {
-	return (bg_pos_t){
-		.x = cf_round(world_pos.x / GRID_SIZE),
-		.y = cf_round(world_pos.y / GRID_SIZE),
-	};
+static Clay_TransitionData
+slide_from_right(Clay_TransitionData targetState, Clay_TransitionProperty properties) {
+	Clay_TransitionData target = targetState;
+	target.boundingBox.x += target.boundingBox.width;
+	return target;
 }
+
+static Clay_TransitionData
+fade_in(Clay_TransitionData targetState, Clay_TransitionProperty properties) {
+	Clay_TransitionData target = targetState;
+	target.boundingBox.y += 10.f;
+	target.overlayColor.r = 0.001f;
+	target.overlayColor.g = 0.001f;
+	target.overlayColor.b = 0.001f;
+	target.overlayColor.a = 0.001f;
+	return target;
+}
+
+// UI {{{
+
+// Modal {{{
+
+static void
+begin_modal(void) {
+}
+
+static bool
+end_modal(void) {
+	return false;
+}
+
+// }}}
+
+// Menu {{{
+
+typedef struct {
+	Clay_ElementDeclaration base_style;
+	Clay_Color hover_background;
+	Clay_TextElementConfig text_config;
+} menu_bar_config_t;
+
+typedef struct {
+	uint32_t focused_menu;
+	uint32_t current_menu;
+	menu_bar_config_t config;
+	bool clicked;
+} menu_bar_ctx_t;
+
+SCENE_VAR(menu_bar_ctx_t, menu_bar_ctx)
+
+static void
+menu_bar_begin(menu_bar_config_t config) {
+	menu_bar_ctx.config = config;
+	menu_bar_ctx.clicked = false;
+}
+
+static void
+menu_bar_end(menu_bar_ctx_t* ctx) {
+	if (ctx->clicked) {
+		ctx->focused_menu = 0;
+	}
+}
+
+static bool
+menu_begin(const char* name) {
+	Clay_String label = { .chars = name, .length = strlen(name) };
+	Clay__OpenElementWithId(CLAY_SID_LOCAL(label));
+
+	bool hovered = Clay_Hovered();
+	uint32_t own_id = Clay_GetOpenElementId();
+	menu_bar_ctx.current_menu = own_id;
+
+	Clay_ElementDeclaration decl = menu_bar_ctx.config.base_style;
+	if (hovered) {
+		decl.backgroundColor = menu_bar_ctx.config.hover_background;
+	}
+	Clay__ConfigureOpenElement(decl);
+
+	Clay__OpenTextElement(label, menu_bar_ctx.config.text_config);
+
+	if (hovered) {
+		if (cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
+			if (own_id == menu_bar_ctx.focused_menu) {
+				menu_bar_ctx.focused_menu = 0;
+			} else {
+				menu_bar_ctx.focused_menu = own_id;
+			}
+		} else if (menu_bar_ctx.focused_menu != 0) {
+			menu_bar_ctx.focused_menu = own_id;
+		}
+	}
+
+	bool opened = own_id == menu_bar_ctx.focused_menu;
+	if (opened) {
+		Clay__OpenElementWithId(CLAY_ID_LOCAL("Content"));
+		Clay_ElementDeclaration decl = menu_bar_ctx.config.base_style;
+		decl.border.width = (Clay_BorderWidth)CLAY_BORDER_OUTSIDE(1);
+		decl.floating = (Clay_FloatingElementConfig){
+			.attachPoints = {
+				.element = CLAY_ATTACH_POINT_LEFT_TOP,
+				.parent = CLAY_ATTACH_POINT_LEFT_BOTTOM,
+			},
+			.attachTo = CLAY_ATTACH_TO_PARENT,
+			.offset = { .y = 0.f },
+		};
+		decl.layout.layoutDirection = CLAY_TOP_TO_BOTTOM;
+		decl.transition.enter.setInitialState = fade_in;
+		decl.transition.exit.setFinalState = fade_in;
+		decl.overlayColor = (Clay_Color){ 1.f, 1.f, 1.f, 1.f };
+		Clay__ConfigureOpenElement(decl);
+	}
+
+	return opened;
+}
+
+static void
+menu_end(void) {
+	if (menu_bar_ctx.current_menu == menu_bar_ctx.focused_menu) {
+		Clay__CloseElement();
+	}
+
+	Clay__CloseElement();
+	menu_bar_ctx.current_menu = 0;
+}
+
+static bool
+menu_item(const char* name, const char* shortcut) {
+	Clay_String label = { .chars = name, .length = strlen(name) };
+
+	Clay__OpenElementWithId(CLAY_SID_LOCAL(label));
+
+	bool hovered = Clay_Hovered();
+	Clay_ElementDeclaration decl = menu_bar_ctx.config.base_style;
+	decl.layout.sizing.width = CLAY_SIZING_GROW(0);
+	decl.layout.padding = (Clay_Padding)CLAY_PADDING_ALL(5);
+	if (hovered) {
+		decl.backgroundColor = menu_bar_ctx.config.hover_background;
+	}
+	Clay__ConfigureOpenElement(decl);
+
+	Clay__OpenTextElement(label, menu_bar_ctx.config.text_config);
+
+	bool clicked = hovered && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT);
+	Clay__CloseElement();
+
+	menu_bar_ctx.clicked |= clicked;
+	return clicked;
+}
+
+// }}}
 
 // Grid {{{
 
@@ -222,6 +368,19 @@ grid_element_alpha(bg_pos_t pos, bg_pos_t cursor) {
 	} else {
 		return 1.f - distance / (float)LIGHT_RADIUS;
 	}
+}
+
+static CF_V2
+grid_pos_to_world(bg_pos_t grid_pos) {
+	return cf_mul(cf_v2(grid_pos.x, grid_pos.y), GRID_SIZE);
+}
+
+static bg_pos_t
+world_pos_to_grid_pos(CF_V2 world_pos) {
+	return (bg_pos_t){
+		.x = cf_round(world_pos.x / GRID_SIZE),
+		.y = cf_round(world_pos.y / GRID_SIZE),
+	};
 }
 
 static void
@@ -367,25 +526,7 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 
 // }}}
 
-static int
-cmp_by_category(const void* lhs_v, const void* rhs_v) {
-	const bg_node_t* lhs = *(const bg_node_t**)lhs_v;
-	const bg_node_t* rhs = *(const bg_node_t**)rhs_v;
-
-	return strcmp(lhs->category, rhs->category);
-}
-
-
-static Clay_TransitionData
-slide_right(Clay_TransitionData targetState, Clay_TransitionProperty properties) {
-	Clay_TransitionData target = targetState;
-	target.boundingBox.x += target.boundingBox.width;
-	target.overlayColor.r = 0.01f;
-	target.overlayColor.g = 0.01f;
-	target.overlayColor.b = 0.01f;
-	target.overlayColor.a = 0.01f;
-	return target;
-}
+// }}}
 
 static void
 update(void) {
@@ -474,7 +615,7 @@ update(void) {
 		.duration = UI_TRANSITION_DURATION,
 		.handler = bgame_ui_transition,
 		.userData = bgame_make_frame_copy(((bgame_ui_transition_config_t){
-			.curve = cf_sin_in_out,
+			.curve = cf_sin_out,
 		})),
 		.properties =
 			  CLAY_TRANSITION_PROPERTY_POSITION
@@ -499,47 +640,62 @@ update(void) {
 			},
 			.border = {
 				.color = UI_BORDER_COLOR,
-				.width = { .bottom = 1 },
+				.width = { .bottom = 1, .betweenChildren = 1 },
 			},
 			.backgroundColor = UI_BACKGROUND_COLOR,
 		}) {
-#define MENU_ENTRY(NAME) \
-			CLAY(CLAY_ID(#NAME), { \
-				.layout.padding = { .left = 5, .right = 5, .top = 5, .bottom = 5 }, \
-				.border = { \
-					.color = UI_BORDER_COLOR, \
-					.width = { .right = 1 }, \
-				}, \
-				.backgroundColor = Clay_Hovered() ? UI_HOVER_COLOR : UI_BACKGROUND_COLOR, \
-				.transition = transition_common, \
-			})
-
-			MENU_ENTRY(File) {
-				CLAY_TEXT(CLAY_STRING("FILE"), {
+			menu_bar_begin((menu_bar_config_t){
+				.base_style = {
+					.layout.padding = { .left = 5, .right = 5, .top = 5, .bottom = 5 },
+					.border = {
+						.color = UI_BORDER_COLOR,
+						.width = { .betweenChildren = 1 },
+					},
+					.backgroundColor = UI_BACKGROUND_COLOR,
+					.transition = transition_common,
+				},
+				.hover_background = UI_HOVER_COLOR,
+				.text_config = {
 					.fontId = FONT_CHROME,
 					.fontSize = MENU_BAR_FONT_SIZE,
 					.textColor = UI_TEXT_COLOR,
 					.textAlignment = CLAY_TEXT_ALIGN_CENTER,
-				});
-			}
+				},
+			});
 
-			MENU_ENTRY(Options) {
-				CLAY_TEXT(CLAY_STRING("OPTIONS"), {
-					.fontId = FONT_CHROME,
-					.fontSize = MENU_BAR_FONT_SIZE,
-					.textColor = UI_TEXT_COLOR,
-					.textAlignment = CLAY_TEXT_ALIGN_CENTER,
-				});
+			if (menu_begin("FILE")) {
+				if (menu_item("New", NULL)) {
+				}
+				if (menu_item("Open", NULL)) {
+				}
+				if (menu_item("Save as", NULL)) {
+				}
+				if (menu_item("Save", NULL)) {
+				}
+				if (menu_item("Exit", NULL)) {
+				}
 			}
+			menu_end();
 
-			MENU_ENTRY(Help) {
-				CLAY_TEXT(CLAY_STRING("HELP"), {
-					.fontId = FONT_CHROME,
-					.fontSize = MENU_BAR_FONT_SIZE,
-					.textColor = UI_TEXT_COLOR,
-					.textAlignment = CLAY_TEXT_ALIGN_CENTER,
-				});
+			if (menu_begin("EDIT")) {
+				if (menu_item("Undo", NULL)) {
+				}
+				if (menu_item("Redo", NULL)) {
+				}
+				if (menu_item("Options", NULL)) {
+				}
 			}
+			menu_end();
+
+			if (menu_begin("HELP")) {
+				if (menu_item("How to use", NULL)) {
+				}
+				if (menu_item("About", NULL)) {
+				}
+			}
+			menu_end();
+
+			menu_bar_end(&menu_bar_ctx);
 		}
 		// }}}
 
@@ -572,7 +728,7 @@ update(void) {
 						.sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_GROW(0) },
 						.layoutDirection = CLAY_TOP_TO_BOTTOM,
 						.childAlignment.y = CLAY_ALIGN_Y_CENTER,
-						.padding = { .left = 1, .right = 1 },
+						.padding = { .left = 5, .right = 5 },
 					},
 					.transition = transition_common,
 					.backgroundColor = Clay_Hovered() ? UI_HOVER_COLOR : UI_BACKGROUND_COLOR, \
@@ -610,15 +766,14 @@ update(void) {
 							.vertical = true,
 							.childOffset = Clay_GetScrollOffset(),
 						},
-						.overlayColor = bgame_ui_color_from_cf(cf_color_white()),
 						.transition = {
 							.duration = UI_TRANSITION_DURATION,
 							.handler = bgame_ui_transition,
 							.userData = bgame_make_frame_copy(((bgame_ui_transition_config_t){
-								.curve = cf_sin_in_out,
+								.curve = cf_sin_out,
 							})),
-							.enter.setInitialState = slide_right,
-							.exit.setFinalState = slide_right,
+							.enter.setInitialState = slide_from_right,
+							.exit.setFinalState = slide_from_right,
 							.properties = CLAY_TRANSITION_PROPERTY_POSITION | CLAY_TRANSITION_PROPERTY_OVERLAY_COLOR,
 						},
 					}) {

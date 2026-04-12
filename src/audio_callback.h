@@ -1,5 +1,5 @@
-#ifndef AUDIO_CALLBACK_H
-#define AUDIO_CALLBACK_H
+#ifndef BEATGRID_AUDIO_CALLBACK_H
+#define BEATGRID_AUDIO_CALLBACK_H
 
 #include <SDL3/SDL_audio.h>
 #include "grid.h"

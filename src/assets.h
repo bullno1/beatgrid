@@ -1,5 +1,5 @@
-#ifndef ASSETS_H
-#define ASSETS_H
+#ifndef BEATGRID_ASSETS_H
+#define BEATGRID_ASSETS_H
 
 #include <bgame/asset/font.h>
 

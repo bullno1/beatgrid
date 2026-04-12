@@ -13,25 +13,20 @@
 #include <SDL3/SDL_audio.h>
 #include "../grid.h"
 #include "../tribuf.h"
-#include "../spike_detector.h"
+#include "../audio_callback.h"
 
 static float GRID_SIZE = 24.f;
 static float KEY_DELAY = 0.2f;
 static float KEY_REPEAT = 0.1f;
 static float KEY_BUFFER = 0.00f;
 static float CURSOR_MOVE_SPEED = 30.f;
-static float MOUSE_THRESHOLD = 0.001f;
+static int SAMPLE_RATE = 44100;
 
 enum {
 	FONT_DEFAULT,
 	FONT_GRID,
 	FONT_CHROME,
 };
-
-typedef struct {
-	bg_grid_params_t grid_params;
-	bg_grid_t grid;
-} audio_cmd_t;
 
 #define SCENE_VAR(TYPE, NAME) BGAME_PRIVATE_VAR(main, TYPE, NAME)
 
@@ -44,12 +39,7 @@ SCENE_VAR(bg_pipeline_params_t, pipeline_params)
 SCENE_VAR(SDL_AudioStream*, audio_stream)
 SCENE_VAR(bool, playing)
 
-SCENE_VAR(audio_cmd_t*, audio_cmd_buf)
-SCENE_VAR(tribuf_t, audio_cmd_queue)
-SCENE_VAR(bg_pipeline_t*, audio_pipeline)
-SCENE_VAR(float*, audio_buf)
-SCENE_VAR(int, audio_buf_len)
-static bg_output_t audio_outputs[1] = { 0 };
+SCENE_VAR(audio_callback_state_t*, audio_callback_state);
 
 SCENE_VAR(CF_ButtonBinding, btn_cursor_up)
 SCENE_VAR(CF_ButtonBinding, btn_cursor_down)
@@ -60,8 +50,6 @@ SCENE_VAR(CF_ButtonBinding, btn_play_pause)
 SCENE_VAR(CF_ButtonBinding, btn_scroll_multiply)
 
 SCENE_VAR(bool, right_sidebar_enabled)
-
-SCENE_VAR(spike_detector_t, spike_detector)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
@@ -92,61 +80,18 @@ destroy_bindings(void) {
 	cf_destroy_button_binding(btn_scroll_multiply);
 }
 
-static void SDLCALL
-audio_callback(
-	void* userdata,
-	SDL_AudioStream* stream,
-    int additional_amount,
-	int total_amount
-) {
-	static float last_sample = 0.f;
-
-	spike_detector_begin(&spike_detector);
-
-	audio_cmd_t* cmd = tribuf_begin_recv(&audio_cmd_queue);
-	if (cmd != NULL) {
-		bg_pipeline_set_params(audio_pipeline, (bg_pipeline_params_t){
-			.dt = 1.f / 44100.f,
-			.num_outputs = CF_ARRAY_SIZE(audio_outputs),
-			.outputs = audio_outputs,
-			.grid_params = cmd->grid_params,
-		});
-		bg_pipeline_build(audio_pipeline, &node_registry, &cmd->grid);
-		tribuf_end_recv(&audio_cmd_queue);
-	}
-
-	int num_frames_needed = additional_amount / sizeof(float);
-	if (num_frames_needed > audio_buf_len) {
-		audio_buf = bgame_realloc(audio_buf, sizeof(float) * num_frames_needed, scene_allocator);
-		audio_buf_len = num_frames_needed;
-	}
-
-	for (int i = 0; i < num_frames_needed; ++i) {
-		bg_pipeline_process(audio_pipeline);
-
-		float sample = audio_outputs[0].value / (float)audio_outputs[0].count;
-		if (!isnan(sample)) {  // NaN is emitted as reset signal
-			audio_buf[i] = last_sample = sample;
-		} else {
-			audio_buf[i] = last_sample;
-		}
-	}
-
-	SDL_PutAudioStreamData(stream, audio_buf, additional_amount);
-
-	spike_detector_end(&spike_detector);
-}
-
 static void
-init_spike_detector(void) {
-	SDL_AudioSpec spec;
-	int num_frames;
-	SDL_GetAudioDeviceFormat(
-		SDL_GetAudioStreamDevice(audio_stream),
-		&spec,
-		&num_frames
-	);
-	spike_detector_init(&spike_detector, num_frames, spec.freq);
+send_audio_state(void) {
+	audio_cmd_t* cmd = audio_callback_control_begin(audio_callback_state);
+
+	bhash_clear(&cmd->grid);
+	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
+		bhash_put(&cmd->grid, grid.keys[i], grid.values[i]);
+	}
+	cmd->grid_params = pipeline_params.grid_params;
+	cmd->playing = playing;
+
+	audio_callback_control_end(audio_callback_state);
 }
 
 static void
@@ -155,42 +100,46 @@ init(void) {
 
 	if (bgame_current_scene_state() == BGAME_SCENE_INITIALIZING) {
 		pipeline_params = (bg_pipeline_params_t){
-			.dt = 1.f / 48000.f,
+			.dt = 1.f / (float)SAMPLE_RATE,
 			.grid_params = {
 				.bpm = 120,
 			},
 		};
+		audio_stream = SDL_OpenAudioDeviceStream(
+			SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+			&(SDL_AudioSpec){
+				.channels = 1,
+				.freq = SAMPLE_RATE,
+				.format = SDL_AUDIO_F32,
+			},
+			NULL,
+			NULL
+		);
 	}
 
 	bg_grid_reinit(&grid, scene_allocator);
-
 	bg_node_registry_reinit(&node_registry, scene_allocator);
 	bg_pipeline_reinit(&editor_pipeline, scene_allocator);
 	bg_pipeline_set_params(editor_pipeline, pipeline_params);
 	bg_pipeline_build(editor_pipeline, &node_registry, &grid);
 
-	if (bgame_current_scene_state() == BGAME_SCENE_INITIALIZING) {
-		audio_cmd_buf = bgame_zalloc(sizeof(audio_cmd_t) * 3, scene_allocator);
-		bg_grid_reinit(&audio_cmd_buf[0].grid, scene_allocator);
-		bg_grid_reinit(&audio_cmd_buf[1].grid, scene_allocator);
-		bg_grid_reinit(&audio_cmd_buf[2].grid, scene_allocator);
-		tribuf_init(&audio_cmd_queue, audio_cmd_buf, sizeof(audio_cmd_t));
-
-		bg_pipeline_reinit(&audio_pipeline, scene_allocator);
-		bg_pipeline_set_params(audio_pipeline, pipeline_params);
-
-		audio_stream = SDL_OpenAudioDeviceStream(
-			SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
-			&(SDL_AudioSpec){
-				.channels = 1,
-				.freq = 44100,
-				.format = SDL_AUDIO_F32,
-			},
-			audio_callback,
-			NULL
-		);
-		init_spike_detector();
-	}
+	SDL_AudioSpec spec;
+	int frames_per_call;
+	SDL_GetAudioDeviceFormat(
+		SDL_GetAudioStreamDevice(audio_stream),
+		&spec,
+		&frames_per_call
+	);
+	audio_callback_reinit(&audio_callback_state, (audio_callback_config_t){
+		.allocator = scene_allocator,
+		.grid_param = pipeline_params.grid_params,
+		.node_registry = &node_registry,
+		.sample_rate = spec.freq,
+		.frames_per_call = frames_per_call,
+	});
+	SDL_SetAudioStreamGetCallback(audio_stream, audio_callback, audio_callback_state);
+	SDL_ResumeAudioStreamDevice(audio_stream);
+	send_audio_state();
 
 	if (bgame_current_scene_state() == BGAME_SCENE_REINITIALIZING) {
 		destroy_bindings();
@@ -228,14 +177,9 @@ init(void) {
 static void
 cleanup(void) {
 	SDL_DestroyAudioStream(audio_stream);
-	bg_grid_cleanup(&audio_cmd_buf[0].grid);
-	bg_grid_cleanup(&audio_cmd_buf[1].grid);
-	bg_grid_cleanup(&audio_cmd_buf[2].grid);
-	bgame_free(audio_cmd_buf, scene_allocator);
-	bgame_free(audio_buf, scene_allocator);
+	audio_callback_cleanup(&audio_callback_state);
 
 	bg_pipeline_cleanup(&editor_pipeline);
-	bg_pipeline_cleanup(&audio_pipeline);
 	bg_node_registry_cleanup(&node_registry);
 	bg_grid_cleanup(&grid);
 
@@ -247,26 +191,6 @@ cleanup(void) {
 static void
 before_reload(void) {
 	SDL_SetAudioStreamGetCallback(audio_stream, NULL, NULL);
-}
-
-static void
-after_reload(void) {
-	bg_grid_reinit(&audio_cmd_buf[0].grid, scene_allocator);
-	bg_grid_reinit(&audio_cmd_buf[1].grid, scene_allocator);
-	bg_grid_reinit(&audio_cmd_buf[2].grid, scene_allocator);
-
-	bg_node_registry_reinit(&node_registry, scene_allocator);
-	bg_pipeline_reinit(&audio_pipeline, scene_allocator);
-	bg_pipeline_build(audio_pipeline, &node_registry, &grid);
-	bg_pipeline_set_params(audio_pipeline, (bg_pipeline_params_t){
-		.dt = 1.f / 48000.f,
-		.num_outputs = CF_ARRAY_SIZE(audio_outputs),
-		.outputs = audio_outputs,
-		.grid_params = pipeline_params.grid_params,
-	});
-
-	init_spike_detector();
-	SDL_SetAudioStreamGetCallback(audio_stream, audio_callback, NULL);
 }
 
 static void
@@ -284,19 +208,6 @@ world_pos_to_grid_pos(CF_V2 world_pos) {
 		.x = cf_round(world_pos.x / GRID_SIZE),
 		.y = cf_round(world_pos.y / GRID_SIZE),
 	};
-}
-
-static void
-send_audio_state(void) {
-	audio_cmd_t* cmd = tribuf_begin_send(&audio_cmd_queue);
-
-	bhash_clear(&cmd->grid);
-	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
-		bhash_put(&cmd->grid, grid.keys[i], grid.values[i]);
-	}
-	cmd->grid_params = pipeline_params.grid_params;
-
-	tribuf_end_send(&audio_cmd_queue);
 }
 
 // Grid {{{
@@ -477,11 +388,12 @@ slide_right(Clay_TransitionData targetState, Clay_TransitionProperty properties)
 
 static void
 update(void) {
-	tribuf_try_swap(&audio_cmd_queue);
+	audio_callback_sync(audio_callback_state);
 
 	cf_app_update(fixed_update);
 
 	bool grid_modified = false;
+	bool should_send_audio_state = false;
 
 	// Input {{{
 
@@ -539,13 +451,7 @@ update(void) {
 	// Control {{{
 	if (cf_button_binding_consume_press(btn_play_pause)) {
 		playing = !playing;
-
-		if (playing) {
-			init_spike_detector();
-			SDL_ResumeAudioStreamDevice(audio_stream);
-		} else {
-			SDL_PauseAudioStreamDevice(audio_stream);
-		}
+		should_send_audio_state = true;
 	}
 
 	if (cf_key_just_pressed(CF_KEY_F12)) {
@@ -873,16 +779,6 @@ update(void) {
 					.sizing = BGAME_UI_RICH_TEXT_GROW,
 				});
 			}
-
-			if (playing && spike_detector_check(&spike_detector)) {
-				STATUS_BOX(Warning) {
-					CLAY_TEXT(CLAY_STRING("!"), {
-						.fontId = FONT_CHROME,
-						.fontSize = STATUS_BAR_FONT_SIZE,
-						.textColor = UI_TEXT_COLOR,
-					});
-				}
-			}
 		}
 	}
 	// }}}
@@ -894,6 +790,10 @@ update(void) {
 
 	if (grid_modified) {
 		bg_pipeline_build(editor_pipeline, &node_registry, &grid);
+		should_send_audio_state = true;
+	}
+
+	if (should_send_audio_state) {
 		send_audio_state();
 	}
 
@@ -905,5 +805,4 @@ BGAME_SCENE(main) = {
 	.update = update,
 	.cleanup = cleanup,
 	.before_reload = before_reload,
-	.after_reload = after_reload,
 };

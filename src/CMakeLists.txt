@@ -2,7 +2,7 @@ set(SOURCES
 	"main.c"
 	"grid.c"
 	"assets.c"
-	"spike_detector.c"
+	"audio_callback.c"
 
 	"scenes/main.c"
 

@@ -75,7 +75,6 @@ typedef BHASH_TABLE(bg_sym_t, const bg_node_t*) bg_node_registry_t;
 
 typedef struct {
 	int bpm;
-	int sample_rate;
 } bg_grid_params_t;
 
 typedef struct {

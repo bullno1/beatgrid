@@ -304,6 +304,7 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 			bool glow = false;
 			if (('0' <= symbol && symbol <= '9') || ('a' <= symbol && symbol <= 'z')) {
 				color = cf_make_color_rgb(0, 255, 65);
+				glow = true;
 			} else if (bhash_has(&node_registry, symbol)) {
 				color = cf_make_color_rgb(0, 245, 255);
 				glow = true;

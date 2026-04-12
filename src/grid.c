@@ -66,7 +66,7 @@ splittable64(uint64_t x) {
 static bhash_hash_t
 bg_hash_pos(const void* key, size_t size) {
 	bg_pos_t pos = *(bg_pos_t*)key;
-	return splittable64((uint64_t)pos.x << 32 | pos.y);
+	return splittable64((uint64_t)pos.x << 32 | (uint64_t)pos.y);
 }
 
 static bhash_hash_t
@@ -135,6 +135,20 @@ bg_pipeline_reinit(bg_pipeline_t** pipeline_ptr, bgame_allocator_t* allocator) {
 void
 bg_pipeline_cleanup(bg_pipeline_t** pipeline_ptr) {
 	bg_pipeline_t* pipeline = *pipeline_ptr;
+
+	// Cleanup nodes
+	for (bhash_index_t i = 0; i < bhash_len(&pipeline->nodes); ++i) {
+		bg_pos_t key = pipeline->nodes.keys[i];
+		bg_node_data_t* value = &pipeline->nodes.values[i];
+
+		bg_node_ctx_t ctx = {
+			.phase = BG_EVAL_CLEANUP,
+			.pipeline = pipeline,
+			.pos = key,
+			.node_data = value,
+		};
+		value->node->eval(&ctx);
+	}
 
 	bhash_cleanup(&pipeline->nodes);
 	bhash_cleanup(&pipeline->consts);

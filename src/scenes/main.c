@@ -9,8 +9,10 @@
 #include <bgame/utils.h>
 #include <cute.h>
 #include <blog.h>
+#include <bhash.h>
 #include "../assets.h"
 #include <SDL3/SDL_audio.h>
+#include <SDL3/SDL_mouse.h>
 #include "../grid.h"
 #include "../tribuf.h"
 #include "../audio_callback.h"
@@ -50,6 +52,12 @@ SCENE_VAR(CF_ButtonBinding, btn_play_pause)
 SCENE_VAR(CF_ButtonBinding, btn_scroll_multiply)
 
 SCENE_VAR(bool, right_sidebar_enabled)
+
+SCENE_VAR(SDL_Cursor*, cur_default)
+SCENE_VAR(SDL_Cursor*, cur_crosshair)
+SCENE_VAR(SDL_Cursor*, cur_vertical_resize)
+typedef BHASH_TABLE(uint32_t, SDL_Cursor*) cursor_map_t;
+SCENE_VAR(cursor_map_t, cursor_map)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
@@ -115,7 +123,13 @@ init(void) {
 			NULL,
 			NULL
 		);
+
+		cur_default = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
+		cur_crosshair = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
+		cur_vertical_resize = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
 	}
+
+	bhash_reinit(&cursor_map, bhash_config(scene_allocator));
 
 	bg_grid_reinit(&grid, scene_allocator);
 	bg_node_registry_reinit(&node_registry, scene_allocator);
@@ -186,6 +200,11 @@ cleanup(void) {
 	destroy_bindings();
 
 	cf_input_disable_ime();
+
+	SDL_DestroyCursor(cur_default);
+	SDL_DestroyCursor(cur_crosshair);
+	SDL_DestroyCursor(cur_vertical_resize);
+	bhash_cleanup(&cursor_map);
 }
 
 static void
@@ -224,6 +243,38 @@ fade_in(Clay_TransitionData targetState, Clay_TransitionProperty properties) {
 }
 
 // UI {{{
+
+// Mouse cursor {{{
+
+void
+set_element_mouse_cursor(uint32_t id, SDL_Cursor* cursor) {
+	bhash_put(&cursor_map, id, cursor);
+}
+
+void
+update_mouse_cursor(void) {
+	Clay_ElementIdArray elements = Clay_GetPointerOverIds();
+	if (elements.length > 0) {
+		bool found = false;
+		for (int i = 0; i < elements.length; ++i) {
+			uint32_t id = elements.internalArray[i].id;
+			SDL_Cursor** cursor_ptr = bhash_get_value(&cursor_map, id);
+
+			if (cursor_ptr != NULL) {
+				SDL_SetCursor(*cursor_ptr);
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			SDL_SetCursor(cur_default);
+		}
+	}
+
+	bhash_clear(&cursor_map);
+}
+
+// }}}
 
 // Modal {{{
 
@@ -407,6 +458,8 @@ world_pos_to_grid_pos(CF_V2 world_pos) {
 static void
 grid_element(const Clay_RenderCommand* command, void* userdata) {
 	const int LIGHT_RADIUS = 10;
+
+	set_element_mouse_cursor(command->id, cur_crosshair);
 
 	BGAME_SCOPE(cf_draw_push(), cf_draw_pop())
 	BGAME_SCOPE(cf_push_text_effect_active(false), cf_pop_text_effect_active())
@@ -646,6 +699,7 @@ update(void) {
 	};
 
 	bgame_update_ui();
+	update_mouse_cursor();
 	Clay_BeginLayout();
 	CLAY(CLAY_ID("Root"), {
 		.layout = {
@@ -940,6 +994,8 @@ update(void) {
 					pipeline_params.grid_params.bpm += cf_mouse_wheel_motion() * multiplier;
 					grid_modified = true;
 				}
+
+				set_element_mouse_cursor(Clay_GetOpenElementId(), cur_vertical_resize);
 			}
 
 			bgame_ui_hspacer(CLAY_ID_LOCAL("Spacer"));

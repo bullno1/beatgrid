@@ -227,13 +227,30 @@ fade_in(Clay_TransitionData targetState, Clay_TransitionProperty properties) {
 
 // Modal {{{
 
+typedef struct {
+	Clay_Color color;
+	Clay_TransitionElementConfig transition;
+} modal_config_t;
+
+typedef struct {
+	modal_config_t config;
+	bool modal_requested;
+	bool clicked;
+} modal_ctx_t;
+
+SCENE_VAR(modal_ctx_t, modal_ctx)
+
 static void
-begin_modal(void) {
+begin_modal(modal_config_t config) {
+	modal_ctx.config = config;
+	modal_ctx.modal_requested = true;
 }
 
 static bool
 end_modal(void) {
-	return false;
+	bool clicked = modal_ctx.clicked;
+	modal_ctx.clicked = false;
+	return clicked;
 }
 
 // }}}
@@ -250,7 +267,7 @@ typedef struct {
 	uint32_t focused_menu;
 	uint32_t current_menu;
 	menu_bar_config_t config;
-	bool clicked;
+	bool should_close;
 } menu_bar_ctx_t;
 
 SCENE_VAR(menu_bar_ctx_t, menu_bar_ctx)
@@ -258,12 +275,12 @@ SCENE_VAR(menu_bar_ctx_t, menu_bar_ctx)
 static void
 menu_bar_begin(menu_bar_config_t config) {
 	menu_bar_ctx.config = config;
-	menu_bar_ctx.clicked = false;
+	menu_bar_ctx.should_close = false;
 }
 
 static void
 menu_bar_end(menu_bar_ctx_t* ctx) {
-	if (ctx->clicked) {
+	if (ctx->should_close) {
 		ctx->focused_menu = 0;
 	}
 }
@@ -299,6 +316,8 @@ menu_begin(const char* name) {
 
 	bool opened = own_id == menu_bar_ctx.focused_menu;
 	if (opened) {
+		begin_modal((modal_config_t){ 0 });
+
 		Clay__OpenElementWithId(CLAY_ID_LOCAL("Content"));
 		Clay_ElementDeclaration decl = menu_bar_ctx.config.base_style;
 		decl.border.width = (Clay_BorderWidth)CLAY_BORDER_OUTSIDE(1);
@@ -308,7 +327,7 @@ menu_begin(const char* name) {
 				.parent = CLAY_ATTACH_POINT_LEFT_BOTTOM,
 			},
 			.attachTo = CLAY_ATTACH_TO_PARENT,
-			.offset = { .y = 0.f },
+			.zIndex = 1,
 		};
 		decl.layout.layoutDirection = CLAY_TOP_TO_BOTTOM;
 		decl.transition.enter.setInitialState = fade_in;
@@ -324,6 +343,8 @@ static void
 menu_end(void) {
 	if (menu_bar_ctx.current_menu == menu_bar_ctx.focused_menu) {
 		Clay__CloseElement();
+
+		menu_bar_ctx.should_close |= end_modal();
 	}
 
 	Clay__CloseElement();
@@ -350,7 +371,7 @@ menu_item(const char* name, const char* shortcut) {
 	bool clicked = hovered && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT);
 	Clay__CloseElement();
 
-	menu_bar_ctx.clicked |= clicked;
+	menu_bar_ctx.should_close |= clicked;
 	return clicked;
 }
 
@@ -938,6 +959,29 @@ update(void) {
 		}
 	}
 	// }}}
+
+	// Modal
+	if (modal_ctx.modal_requested) {
+		CLAY(CLAY_ID("Modal"), {
+			.layout.sizing = { CLAY_SIZING_GROW(), CLAY_SIZING_GROW() },
+			.floating = {
+				.attachTo = CLAY_ATTACH_TO_ELEMENT_WITH_ID,
+				.attachPoints = {
+					.element = CLAY_ATTACH_POINT_LEFT_TOP,
+					.parent = CLAY_ATTACH_POINT_LEFT_TOP,
+				},
+				.parentId = CLAY_ID("Mid").id,
+			},
+			.backgroundColor = modal_ctx.config.color,
+			.transition = modal_ctx.config.transition,
+		}) {
+			if (Clay_Hovered() && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
+				modal_ctx.clicked = true;
+			}
+		}
+
+		modal_ctx.modal_requested = false;
+	}
 
 	Clay_RenderCommandArray render_cmds = Clay_EndLayout(CF_DELTA_TIME);
 	bgame_render_ui(render_cmds);

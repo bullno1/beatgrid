@@ -99,15 +99,7 @@ history_can_redo(history_t* history) {
 
 void
 history_clear(history_t* history) {
-	history->current_index = 0;
-	history->current_version += 1;
-
 	for (int i = 0; i < history->num_entries; ++i) {
 		history->entries[i].version = history->current_version;
 	}
-
-	history_entry_t* entry = &history->entries[history->current_index];
-
-	bg_grid_clear(&entry->grid);
-	entry->version = history->current_version;
 }

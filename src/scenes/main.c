@@ -844,6 +844,128 @@ save_document_as(const char* filename_hint) {
 	barena_reset(&arena);
 }
 
+static ufa_status_t
+do_open_document(ufa_open_file_t* open_file) {
+	ufa_status_t status = UFA_OK;
+
+	int width = 0;
+	int x = 0;
+	int y = 0;
+
+	bg_grid_t tmp_grid;
+	bg_grid_reinit(&tmp_grid, scene_allocator);
+
+	while (true) {
+		char ch;
+		size_t size = sizeof(ch);
+		if (
+			(status = ufa_read_open_file(open_file, &ch, &size)) != UFA_OK
+			||
+			size == 0
+		) {
+			break;
+		}
+
+		if (ch == '\r') {
+			// noop
+		} else if (ch == '\n') {
+			y -= 1;
+			x = 0;
+		} else if (ch == ' ') {
+			x += 1;
+			width = cf_max(x, width);
+		} else {
+			bg_grid_put(&tmp_grid, (bg_pos_t){ x, y }, ch);
+
+			x += 1;
+			width = cf_max(x, width);
+		}
+	}
+
+	if (status == UFA_OK) {
+		EDIT_GRID(history, grid) {
+			bg_grid_copy(grid, &tmp_grid);
+		}
+		history_clear(history);
+
+		Clay_ElementData element_data = Clay_GetElementData(CLAY_ID("Grid"));
+		if (element_data.found) {
+			float grid_width = width * GRID_SIZE;
+			float grid_height = -y * GRID_SIZE;
+
+			grid_offset.x = (element_data.boundingBox.width - grid_width) * 0.5f;
+			grid_offset.y = (element_data.boundingBox.height + grid_height) * -0.5f;
+			cursor_pos.x = width / 2;
+			cursor_pos.y = y / 2;
+		}
+	}
+
+	bg_grid_cleanup(&tmp_grid);
+
+	return status;
+}
+
+static void
+modal_action_open(void* userdata) {
+	barena_t arena;
+	barena_init(&arena, bgame_arena_pool);
+
+	ufa_filter_t filters[] = {
+		{
+			.name = "Text file",
+			.pattern = "txt",
+		},
+		{
+			.name = "All files",
+			.pattern = "*",
+		},
+	};
+
+	const char* directory = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+	if (!is_file_untitled()) {
+		int dir_len = (int)strlen(current_filename) - 1;
+		for (; dir_len >= 0; --dir_len) {
+			char path_ch = current_filename[dir_len];
+			if (path_ch == '/' || path_ch == '\\') {
+				break;
+			}
+		}
+
+		if (dir_len > 0) {
+			directory = bgame_fmt("%.*s", dir_len, current_filename);
+		}
+	}
+
+	ufa_open_file_t* open_file = ufa_begin_open_file((ufa_config_t){
+		.arena = &arena,
+		.filters = filters,
+		.num_filters = CF_ARRAY_SIZE(filters),
+		.directory = directory,
+	});
+
+	ufa_status_t status;
+	while ((status = ufa_check_open_file(open_file)) == UFA_PENDING) {
+		begin_modal((modal_config_t){ 0 });
+		end_modal();
+
+		modal_wait();
+	}
+
+	if (
+		status == UFA_OK
+		&&
+		do_open_document(open_file) == UFA_OK
+	) {
+		set_filename(ufa_get_open_file_name(open_file));
+		saved_version = history_current_version(history);
+		update_window_title();
+	}
+
+	ufa_end_open_file(open_file);
+
+	barena_reset(&arena);
+}
+
 static void
 modal_action_save_as(void* userdata) {
 	save_document_as(NULL);
@@ -1325,6 +1447,9 @@ update(void) {
 
 	switch (pending_command) {
 		case CMD_NEW: {
+			EDIT_GRID(history, grid) {
+				bg_grid_clear(grid);
+			}
 			history_clear(history);
 			if (!is_file_untitled()) {
 				current_filename[0] = '\0';
@@ -1333,6 +1458,7 @@ update(void) {
 		} break;
 
 		case CMD_OPEN: {
+			start_modal_process(dialog_modal_config, modal_action_open, NULL);
 		} break;
 
 		case CMD_SAVE: {

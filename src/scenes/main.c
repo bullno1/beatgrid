@@ -342,13 +342,9 @@ static void
 modal_process_wrapper(CF_Coroutine coro) {
 	modal_coro_ctx_t ctx = *(modal_coro_ctx_t*)cf_coroutine_get_udata(coro);
 
-	BLOG_DEBUG("Begin modal");
-
 	bgame_block_reload();
 	ctx.entry(ctx.userdata);
 	bgame_unblock_reload();
-
-	BLOG_DEBUG("End modal");
 }
 
 static void
@@ -646,7 +642,6 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 			cursor_target,
 			GRID_SIZE, GRID_SIZE
 		);
-		cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
 
 		cursor_smooth_pos = cf_add(
 			cursor_smooth_pos,
@@ -655,13 +650,21 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 				(1 - cf_exp(- CURSOR_MOVE_SPEED * CF_DELTA_TIME))
 			)
 		);
-		CF_Aabb cursor_trail = cf_make_aabb_pos_w_h(
-			cursor_smooth_pos,
-			GRID_SIZE, GRID_SIZE
-		);
-		cf_draw_push_color(cf_make_color_rgba(255, 255, 255, 200));
-		cf_draw_box_rounded(cursor_trail, 0.5f, 1.2f);
-		cf_draw_pop_color();
+
+		if (cf_distance(cursor_smooth_pos, cursor_target) > 1.f) {
+			CF_Aabb cursor_trail = cf_make_aabb_pos_w_h(
+				cursor_smooth_pos,
+				GRID_SIZE, GRID_SIZE
+			);
+			CF_V2 trail_verts[8];
+			cf_aabb_verts(&trail_verts[0], cursor_trail);
+			cf_aabb_verts(&trail_verts[4], cursor_box);
+			int num_verts = cf_hull(trail_verts, 8);
+
+			cf_draw_polyline(trail_verts, num_verts, 0.1f, true);
+		} else {
+			cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
+		}
 
 		if (
 			Clay_PointerOver((Clay_ElementId){ .id = command->id })
@@ -783,6 +786,9 @@ save_document_as(const char* filename_hint) {
 
 	ufa_status_t status;
 	while ((status = ufa_check_save_file(save_file)) == UFA_PENDING) {
+		begin_modal((modal_config_t){ 0 });
+		end_modal();
+
 		modal_wait();
 	}
 
@@ -1247,7 +1253,9 @@ update(void) {
 	// }}}
 
 	// Modal
-	if (modal_ctx.modal_requested || modal_coro.id != 0) {
+	modal_execute();
+
+	if (modal_ctx.modal_requested) {
 		CLAY(CLAY_ID("Modal"), {
 			.layout.sizing = { CLAY_SIZING_GROW(), CLAY_SIZING_GROW() },
 			.floating = {
@@ -1261,8 +1269,6 @@ update(void) {
 			.backgroundColor = modal_ctx.config.color,
 			.transition = modal_ctx.config.transition,
 		}) {
-			modal_execute();
-
 			if (Clay_Hovered() && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
 				modal_ctx.clicked = true;
 			}

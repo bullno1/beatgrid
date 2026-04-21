@@ -12,6 +12,7 @@ _Static_assert(offsetof(SDL_DialogFileFilter, pattern) == offsetof(ufa_filter_t,
 
 typedef struct {
 	barena_t* arena;
+	const ufa_filter_t* filters;
 	const char* filename;
 	ufa_status_t status;
 	SDL_IOStream* stream;
@@ -29,6 +30,18 @@ ufa_open_file(ufa_t* ufa, const char* filename) {
 	ufa->status = ufa->stream != NULL ? UFA_OK : UFA_ERROR;
 }
 
+static bool
+ufa_str_ends_with(const char *str, const char *suffix) {
+	if (!str || !suffix) { return false; }
+
+	size_t str_len = strlen(str);
+	size_t suffix_len = strlen(suffix);
+
+	if (suffix_len > str_len) { return false; }
+
+	return strcmp(str + str_len - suffix_len, suffix) == 0;
+}
+
 static void SDLCALL
 ufa_file_callback(void* userdata, const char* const* filelist, int filter) {
 	ufa_t* ufa = userdata;
@@ -38,7 +51,16 @@ ufa_file_callback(void* userdata, const char* const* filelist, int filter) {
 	} else if (*filelist == NULL) {
 		ufa->status = UFA_CANCELLED;
 	} else {
-		ufa_open_file(ufa, *filelist);
+		const char* filename = *filelist;
+		const char* extension = ufa->filters[filter >= 0 ? filter : 0].pattern;
+		if (ufa->mode[0] == 'w' && !ufa_str_ends_with(filename, extension)) {
+			size_t name_buf_len = strlen(filename) + strlen(extension) + 2;
+			char* name_buf = barena_memalign(ufa->arena, name_buf_len, _Alignof(char));
+			snprintf(name_buf, name_buf_len, "%s.%s", filename, extension);
+			filename = name_buf;
+		}
+
+		ufa_open_file(ufa, filename);
 	}
 }
 
@@ -47,6 +69,7 @@ ufa_begin_open_file(ufa_config_t config) {
 	ufa_t* ufa = barena_memalign(config.arena, sizeof(ufa_t), _Alignof(ufa_t));
 	*ufa = (ufa_t){
 		.arena = config.arena,
+		.filters = config.filters,
 		.status = UFA_PENDING,
 		.mode = "r",
 	};
@@ -105,6 +128,7 @@ ufa_begin_save_file(ufa_config_t config) {
 	ufa_t* ufa = barena_memalign(config.arena, sizeof(ufa_t), _Alignof(ufa_t));
 	*ufa = (ufa_t){
 		.arena = config.arena,
+		.filters = config.filters,
 		.status = UFA_PENDING,
 		.mode = "w",
 	};

@@ -67,7 +67,9 @@ SCENE_VAR(bool, right_sidebar_enabled)
 SCENE_VAR(SDL_Cursor*, cur_default)
 SCENE_VAR(SDL_Cursor*, cur_crosshair)
 SCENE_VAR(SDL_Cursor*, cur_vertical_resize)
+SCENE_VAR(SDL_Cursor*, cur_move)
 typedef BHASH_TABLE(uint32_t, SDL_Cursor*) cursor_map_t;
+static SDL_Cursor* modal_cursor;
 SCENE_VAR(cursor_map_t, cursor_map)
 
 SCENE_VAR(history_t*, history)
@@ -78,6 +80,8 @@ SCENE_VAR(size_t, current_filename_capacity)
 SCENE_VAR(history_version_t, saved_version)
 
 SCENE_VAR(CF_Coroutine, modal_coro)
+
+SCENE_VAR(CF_V2, grid_offset)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
@@ -144,6 +148,7 @@ init(void) {
 		cur_default = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
 		cur_crosshair = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
 		cur_vertical_resize = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+		cur_move = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
 	}
 
 	bhash_reinit(&cursor_map, bhash_config(scene_allocator));
@@ -222,6 +227,7 @@ cleanup(void) {
 	SDL_DestroyCursor(cur_default);
 	SDL_DestroyCursor(cur_crosshair);
 	SDL_DestroyCursor(cur_vertical_resize);
+	SDL_DestroyCursor(cur_move);
 	bhash_cleanup(&cursor_map);
 
 	if (modal_coro.id != 0) {
@@ -279,26 +285,35 @@ set_element_mouse_cursor(uint32_t id, SDL_Cursor* cursor) {
 }
 
 void
-update_mouse_cursor(void) {
-	Clay_ElementIdArray elements = Clay_GetPointerOverIds();
-	if (elements.length > 0) {
-		bool found = false;
-		for (int i = 0; i < elements.length; ++i) {
-			uint32_t id = elements.internalArray[i].id;
-			SDL_Cursor** cursor_ptr = bhash_get_value(&cursor_map, id);
+set_modal_cursor(SDL_Cursor* cursor) {
+	modal_cursor = cursor;
+}
 
-			if (cursor_ptr != NULL) {
-				SDL_SetCursor(*cursor_ptr);
-				found = true;
-				break;
+void
+update_mouse_cursor(void) {
+	if (modal_coro.id != 0 && modal_cursor != NULL) {
+		SDL_SetCursor(modal_cursor);
+	} else {
+		Clay_ElementIdArray elements = Clay_GetPointerOverIds();
+		if (elements.length > 0) {
+			bool found = false;
+			for (int i = 0; i < elements.length; ++i) {
+				uint32_t id = elements.internalArray[i].id;
+				SDL_Cursor** cursor_ptr = bhash_get_value(&cursor_map, id);
+
+				if (cursor_ptr != NULL) {
+					SDL_SetCursor(*cursor_ptr);
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				SDL_SetCursor(cur_default);
 			}
 		}
-		if (!found) {
-			SDL_SetCursor(cur_default);
-		}
-	}
 
-	bhash_clear(&cursor_map);
+		bhash_clear(&cursor_map);
+	}
 }
 
 // }}}
@@ -345,6 +360,7 @@ modal_process_wrapper(CF_Coroutine coro) {
 	bgame_block_reload();
 	ctx.entry(ctx.userdata);
 	bgame_unblock_reload();
+	set_modal_cursor(NULL);
 }
 
 static void
@@ -529,6 +545,22 @@ world_pos_to_grid_pos(CF_V2 world_pos) {
 }
 
 static void
+grid_drag(void* userdata) {
+	set_modal_cursor(cur_move);
+
+	float original_mouse_x = cf_mouse_x();
+	float original_mouse_y = cf_mouse_y();
+	CF_V2 original_offset = grid_offset;
+
+	while (cf_mouse_down(CF_MOUSE_BUTTON_MIDDLE)) {
+		grid_offset.x = original_offset.x + cf_mouse_x() - original_mouse_x;
+		grid_offset.y = original_offset.y + cf_mouse_y() - original_mouse_y;
+
+		modal_wait();
+	}
+}
+
+static void
 grid_element(const Clay_RenderCommand* command, void* userdata) {
 	const int LIGHT_RADIUS = 10;
 
@@ -542,7 +574,10 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 	{
 		const CF_V2 text_size = cf_text_size("X", 1);
 
-		cf_draw_translate(command->boundingBox.x, -command->boundingBox.y - command->boundingBox.height);
+		cf_draw_translate(
+			 command->boundingBox.x + grid_offset.x,
+			-command->boundingBox.y - command->boundingBox.height - grid_offset.y
+		);
 
 		// Grid
 		for (int x = cursor_pos.x - LIGHT_RADIUS; x <= cursor_pos.x + LIGHT_RADIUS; ++x) {
@@ -666,15 +701,17 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 			cf_draw_box_rounded(cursor_box, 0.5f, 1.2f);
 		}
 
-		if (
-			Clay_PointerOver((Clay_ElementId){ .id = command->id })
-			&&
-			cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)
-		) {
-			CF_V2 p = cf_screen_to_world(cf_v2((float)cf_mouse_x(), (float)cf_mouse_y()));
-			p = cf_div(p, cf_v2(GRID_SIZE, GRID_SIZE));
-			cursor_pos.x = cf_round(p.x);
-			cursor_pos.y = cf_round(p.y);
+		if (Clay_PointerOver((Clay_ElementId){ .id = command->id })) {
+			if (cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
+				CF_V2 p = cf_screen_to_world(cf_v2((float)cf_mouse_x(), (float)cf_mouse_y()));
+				p = cf_div(p, cf_v2(GRID_SIZE, GRID_SIZE));
+				cursor_pos.x = cf_round(p.x);
+				cursor_pos.y = cf_round(p.y);
+			}
+
+			if (cf_mouse_just_pressed(CF_MOUSE_BUTTON_MIDDLE)) {
+				start_modal_process((modal_config_t){ 0 }, grid_drag, NULL);
+			}
 		}
 	}
 }

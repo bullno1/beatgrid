@@ -3,6 +3,7 @@ set(SOURCES
 	"grid.c"
 	"assets.c"
 	"audio_callback.c"
+	"ufa.c"
 	"history.c"
 
 	"scenes/main.c"

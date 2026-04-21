@@ -10,12 +10,14 @@
 #include <cute.h>
 #include <blog.h>
 #include <bhash.h>
+#include <barena.h>
 #include "../assets.h"
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_mouse.h>
 #include "../grid.h"
 #include "../audio_callback.h"
 #include "../history.h"
+#include "../ufa.h"
 
 static float GRID_SIZE = 24.f;
 static float KEY_DELAY = 0.2f;
@@ -69,6 +71,11 @@ SCENE_VAR(cursor_map_t, cursor_map)
 
 SCENE_VAR(history_t*, history)
 SCENE_VAR(history_version_t, tracked_history_version)
+
+SCENE_VAR(char*, filename)
+SCENE_VAR(size_t, filename_capacity)
+
+SCENE_VAR(CF_Coroutine, modal_coro)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
@@ -214,6 +221,15 @@ cleanup(void) {
 	SDL_DestroyCursor(cur_crosshair);
 	SDL_DestroyCursor(cur_vertical_resize);
 	bhash_cleanup(&cursor_map);
+
+	if (modal_coro.id != 0) {
+		cf_destroy_coroutine(modal_coro);
+		modal_coro.id = 0;
+	}
+
+	bgame_free(filename, scene_allocator);
+	filename = NULL;
+	filename_capacity = 0;
 }
 
 static void
@@ -298,6 +314,13 @@ typedef struct {
 	bool clicked;
 } modal_ctx_t;
 
+typedef void (*modal_entry_fn_t)(void* userdata);
+
+typedef struct {
+	modal_entry_fn_t entry;
+	void* userdata;
+} modal_coro_ctx_t;
+
 SCENE_VAR(modal_ctx_t, modal_ctx)
 
 static void
@@ -311,6 +334,49 @@ end_modal(void) {
 	bool clicked = modal_ctx.clicked;
 	modal_ctx.clicked = false;
 	return clicked;
+}
+
+static void
+modal_process_wrapper(CF_Coroutine coro) {
+	modal_coro_ctx_t ctx = *(modal_coro_ctx_t*)cf_coroutine_get_udata(coro);
+
+	BLOG_DEBUG("Begin modal");
+
+	bgame_block_reload();
+	ctx.entry(ctx.userdata);
+	bgame_unblock_reload();
+
+	BLOG_DEBUG("End modal");
+}
+
+static void
+start_modal_process(modal_config_t config, modal_entry_fn_t fn, void* userdata) {
+	if (modal_coro.id != 0) { return; }
+
+	modal_ctx.config = config;
+
+	modal_coro_ctx_t ctx = {
+		.entry = fn,
+		.userdata = userdata,
+	};
+	modal_coro = cf_make_coroutine(modal_process_wrapper, 0, &ctx);
+	cf_coroutine_resume(modal_coro);  // Let it copy the userdata before it goes out of scope
+}
+
+static void
+modal_wait(void) {
+	cf_coroutine_yield(cf_coroutine_currently_running());
+}
+
+static void
+modal_execute(void) {
+	if (modal_coro.id == 0) { return; }
+
+	cf_coroutine_resume(modal_coro);
+	if (cf_coroutine_state(modal_coro) == CF_COROUTINE_STATE_DEAD) {
+		cf_destroy_coroutine(modal_coro);
+		modal_coro.id = 0;
+	}
 }
 
 // }}}
@@ -362,7 +428,7 @@ menu_begin(const char* name) {
 
 	Clay__OpenTextElement(label, menu_bar_ctx.config.text_config);
 
-	if (hovered) {
+	if (hovered && modal_coro.id == 0) {
 		if (cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
 			if (own_id == menu_bar_ctx.focused_menu) {
 				menu_bar_ctx.focused_menu = 0;
@@ -612,6 +678,78 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 
 // }}}
 
+// Serialization {{{
+
+static bool
+is_file_untitled(void) {
+	return filename == NULL || filename[0] == '\0';
+}
+
+static ufa_status_t
+do_save_document(ufa_save_file_t* save_file) {
+	ufa_status_t status = UFA_OK;
+
+	bg_pos_t min = { INT_MAX, INT_MAX };
+	bg_pos_t max = { INT_MIN, INT_MIN };
+
+	const bg_grid_t* grid = history_current_copy(history);
+	for (bhash_index_t i = 0; i < bhash_len(grid); ++i) {
+		bg_pos_t pos = grid->keys[i];
+
+		min.x = cf_min(pos.x, min.x);
+		min.y = cf_min(pos.y, min.y);
+		max.x = cf_max(pos.x, max.x);
+		max.y = cf_max(pos.y, max.y);
+	}
+
+	for (int y = max.y; y >= min.y; --y) {
+		for (int x = min.x; x <= max.x; ++x) {
+			size_t size = 1;
+			bg_sym_t ch = bg_grid_get(grid, (bg_pos_t){ x, y });
+			if ((status = ufa_write_save_file(save_file, &ch, &size)) != UFA_OK) {
+				break;
+			}
+		}
+
+		size_t size = 1;
+		if ((status = ufa_write_save_file(save_file, &(char){ '\n' }, &size)) != UFA_OK) {
+			break;
+		}
+	}
+
+	return status;
+}
+
+static void
+save_document_as(void* userdata) {
+	barena_t arena;
+	barena_init(&arena, bgame_arena_pool);
+
+	ufa_filter_t filters[] = {
+		{
+			.name = "Text file",
+			.pattern = "txt",
+		},
+	};
+	ufa_save_file_t* save_file = ufa_begin_save_file(&arena, filters, CF_ARRAY_SIZE(filters));
+
+	ufa_status_t status;
+	while ((status = ufa_check_save_file(save_file)) == UFA_PENDING) {
+		modal_wait();
+	}
+
+	if (status == UFA_OK) {
+		do_save_document(save_file);
+	}
+
+	ufa_end_save_file(save_file);
+
+	barena_reset(&arena);
+}
+
+
+// }}}
+
 static void
 update(void) {
 	audio_callback_sync(audio_callback_state);
@@ -754,12 +892,19 @@ update(void) {
 				if (menu_item("New", NULL)) {
 					pending_command = CMD_NEW;
 				}
+
 				if (menu_item("Open", NULL)) {
+					pending_command = CMD_OPEN;
 				}
-				if (menu_item("Save as", NULL)) {
-				}
+
 				if (menu_item("Save", NULL)) {
+					pending_command = is_file_untitled() ? CMD_SAVE_AS : CMD_SAVE;
 				}
+
+				if (menu_item("Save as", NULL)) {
+					pending_command = CMD_SAVE_AS;
+				}
+
 				if (menu_item("Exit", NULL)) {
 				}
 			}
@@ -769,9 +914,11 @@ update(void) {
 				if (menu_item("Undo", NULL)) {
 					pending_command = CMD_UNDO;
 				}
+
 				if (menu_item("Redo", NULL)) {
 					pending_command = CMD_REDO;
 				}
+
 				if (menu_item("Options", NULL)) {
 				}
 			}
@@ -1033,7 +1180,7 @@ update(void) {
 	// }}}
 
 	// Modal
-	if (modal_ctx.modal_requested) {
+	if (modal_ctx.modal_requested || modal_coro.id != 0) {
 		CLAY(CLAY_ID("Modal"), {
 			.layout.sizing = { CLAY_SIZING_GROW(), CLAY_SIZING_GROW() },
 			.floating = {
@@ -1047,6 +1194,8 @@ update(void) {
 			.backgroundColor = modal_ctx.config.color,
 			.transition = modal_ctx.config.transition,
 		}) {
+			modal_execute();
+
 			if (Clay_Hovered() && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
 				modal_ctx.clicked = true;
 			}
@@ -1060,9 +1209,23 @@ update(void) {
 
 	// }}}
 
+	modal_config_t dialog_modal_config = {
+		.transition = transition_common,
+	};
+
 	switch (pending_command) {
 		case CMD_NEW: {
 			history_clear(history);
+		} break;
+
+		case CMD_OPEN: {
+		} break;
+
+		case CMD_SAVE: {
+		} break;
+
+		case CMD_SAVE_AS: {
+			start_modal_process(dialog_modal_config, save_document_as, NULL);
 		} break;
 
 		case CMD_UNDO: {

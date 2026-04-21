@@ -114,6 +114,12 @@ bg_grid_put(bg_grid_t* grid, bg_pos_t pos, bg_sym_t sym) {
 	}
 }
 
+static inline bg_sym_t
+bg_grid_get(const bg_grid_t* grid, bg_pos_t pos) {
+	bg_sym_t* value = bhash_get_value(grid, pos);
+	return value == NULL ? ' ' : *value;
+}
+
 static inline void
 bg_grid_copy(bg_grid_t* dst, const bg_grid_t* src) {
 	bhash_clear(dst);

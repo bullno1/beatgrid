@@ -14,8 +14,8 @@
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_mouse.h>
 #include "../grid.h"
-#include "../tribuf.h"
 #include "../audio_callback.h"
+#include "../history.h"
 
 static float GRID_SIZE = 24.f;
 static float KEY_DELAY = 0.2f;
@@ -30,11 +30,19 @@ enum {
 	FONT_CHROME,
 };
 
+typedef enum {
+	CMD_NONE,
+	CMD_UNDO,
+	CMD_REDO,
+	CMD_NEW,
+	CMD_OPEN,
+	CMD_SAVE,
+	CMD_SAVE_AS,
+} editor_command_t;
 #define SCENE_VAR(TYPE, NAME) BGAME_PRIVATE_VAR(main, TYPE, NAME)
 
 SCENE_VAR(bg_pos_t, cursor_pos)
 SCENE_VAR(CF_V2, cursor_smooth_pos)
-SCENE_VAR(bg_grid_t, grid)
 SCENE_VAR(bg_node_registry_t, node_registry)
 SCENE_VAR(bg_pipeline_t*, editor_pipeline)
 SCENE_VAR(bg_pipeline_params_t, pipeline_params)
@@ -58,6 +66,8 @@ SCENE_VAR(SDL_Cursor*, cur_crosshair)
 SCENE_VAR(SDL_Cursor*, cur_vertical_resize)
 typedef BHASH_TABLE(uint32_t, SDL_Cursor*) cursor_map_t;
 SCENE_VAR(cursor_map_t, cursor_map)
+
+SCENE_VAR(history_t*, history)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
@@ -92,10 +102,7 @@ static void
 send_audio_state(void) {
 	audio_cmd_t* cmd = audio_callback_control_begin(audio_callback_state);
 
-	bhash_clear(&cmd->grid);
-	for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
-		bhash_put(&cmd->grid, grid.keys[i], grid.values[i]);
-	}
+	bg_grid_copy(&cmd->grid, history_current_copy(history));
 	cmd->grid_params = pipeline_params.grid_params;
 	cmd->playing = playing;
 
@@ -131,11 +138,12 @@ init(void) {
 
 	bhash_reinit(&cursor_map, bhash_config(scene_allocator));
 
-	bg_grid_reinit(&grid, scene_allocator);
+	history_reinit(&history, scene_allocator, 128);
+
 	bg_node_registry_reinit(&node_registry, scene_allocator);
 	bg_pipeline_reinit(&editor_pipeline, scene_allocator);
 	bg_pipeline_set_params(editor_pipeline, pipeline_params);
-	bg_pipeline_build(editor_pipeline, &node_registry, &grid);
+	bg_pipeline_build(editor_pipeline, &node_registry, history_current_copy(history));
 
 	SDL_AudioSpec spec;
 	int frames_per_call;
@@ -195,7 +203,7 @@ cleanup(void) {
 
 	bg_pipeline_cleanup(&editor_pipeline);
 	bg_node_registry_cleanup(&node_registry);
-	bg_grid_cleanup(&grid);
+	history_cleanup(&history, scene_allocator);
 
 	destroy_bindings();
 
@@ -460,6 +468,7 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 	const int LIGHT_RADIUS = 10;
 
 	set_element_mouse_cursor(command->id, cur_crosshair);
+	const bg_grid_t* grid = history_current_copy(history);
 
 	BGAME_SCOPE(cf_draw_push(), cf_draw_pop())
 	BGAME_SCOPE(cf_push_text_effect_active(false), cf_pop_text_effect_active())
@@ -474,7 +483,7 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 		for (int x = cursor_pos.x - LIGHT_RADIUS; x <= cursor_pos.x + LIGHT_RADIUS; ++x) {
 			for (int y = cursor_pos.y - LIGHT_RADIUS; y <= cursor_pos.y + LIGHT_RADIUS; ++y) {
 				bg_pos_t pos = { x, y };
-				if (bhash_has(&grid, pos)) { continue; }
+				if (bhash_has(grid, pos)) { continue; }
 
 				float distance = cf_distance(cf_v2(cursor_pos.x, cursor_pos.y), cf_v2(x, y));
 				if (distance > LIGHT_RADIUS) { continue; }
@@ -521,11 +530,11 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 		}
 
 		// Symbols
-		for (bhash_index_t i = 0; i < bhash_len(&grid); ++i) {
-			bg_pos_t pos = grid.keys[i];
+		for (bhash_index_t i = 0; i < bhash_len(grid); ++i) {
+			bg_pos_t pos = grid->keys[i];
 			cf_push_text_id(bhash_hash(&pos, sizeof(pos)));
 
-			bg_sym_t symbol = grid.values[i];
+			bg_sym_t symbol = grid->values[i];
 
 			char text_buf[2] = { symbol, 0 };
 			CF_V2 text_pos = grid_pos_to_world(pos);
@@ -608,8 +617,9 @@ update(void) {
 
 	cf_app_update(fixed_update);
 
-	bool grid_modified = false;
+	bool should_rebuild_pipeline = false;
 	bool should_send_audio_state = false;
+	editor_command_t pending_command = CMD_NONE;
 
 	// Input {{{
 
@@ -649,8 +659,10 @@ update(void) {
 
 	// Edit {{{
 	if (cf_button_binding_consume_press(btn_del_sym)) {
-		bg_grid_del(&grid, cursor_pos);
-		grid_modified = true;
+		EDIT_GRID(history, grid) {
+			bg_grid_del(grid, cursor_pos);
+		}
+		should_rebuild_pipeline = true;
 	}
 
 	if (cf_input_text_has_data()) {
@@ -658,8 +670,10 @@ update(void) {
 		cf_input_text_clear();
 
 		if (codepoint >= 32 && codepoint <= 126 && codepoint != ' ') {
-			bg_grid_put(&grid, cursor_pos, (bg_sym_t)codepoint);
-			grid_modified = true;
+			EDIT_GRID(history, grid) {
+				bg_grid_put(grid, cursor_pos, (bg_sym_t)codepoint);
+			}
+			should_rebuild_pipeline = true;
 		}
 	}
 	// }}}
@@ -683,7 +697,7 @@ update(void) {
 	const Clay_Color UI_TEXT_COLOR = bgame_ui_color_rgb(0, 255, 65);
 	const Clay_Color UI_BACKGROUND_COLOR = bgame_ui_color_rgb(4, 12, 5);
 	const Clay_Color UI_HOVER_COLOR = bgame_ui_color_rgb(0, 61, 15);
-	const float UI_TRANSITION_DURATION = 0.25f;
+	const float UI_TRANSITION_DURATION = 0.15f;
 
 	Clay_TransitionElementConfig transition_common = {
 		.duration = UI_TRANSITION_DURATION,
@@ -740,6 +754,7 @@ update(void) {
 
 			if (menu_begin("FILE")) {
 				if (menu_item("New", NULL)) {
+					pending_command = CMD_NEW;
 				}
 				if (menu_item("Open", NULL)) {
 				}
@@ -754,8 +769,10 @@ update(void) {
 
 			if (menu_begin("EDIT")) {
 				if (menu_item("Undo", NULL)) {
+					pending_command = CMD_UNDO;
 				}
 				if (menu_item("Redo", NULL)) {
+					pending_command = CMD_REDO;
 				}
 				if (menu_item("Options", NULL)) {
 				}
@@ -992,7 +1009,8 @@ update(void) {
 				if (Clay_Hovered()) {
 					int multiplier = cf_button_binding_down(btn_scroll_multiply) ? 10 : 1;
 					pipeline_params.grid_params.bpm += cf_mouse_wheel_motion() * multiplier;
-					grid_modified = true;
+					bg_pipeline_set_params(editor_pipeline, pipeline_params);
+					should_send_audio_state = true;
 				}
 
 				set_element_mouse_cursor(Clay_GetOpenElementId(), cur_vertical_resize);
@@ -1044,8 +1062,28 @@ update(void) {
 
 	// }}}
 
-	if (grid_modified) {
-		bg_pipeline_build(editor_pipeline, &node_registry, &grid);
+	switch (pending_command) {
+		case CMD_NEW: {
+			history_clear(history);
+			should_rebuild_pipeline = true;
+		} break;
+
+		case CMD_UNDO: {
+			history_undo(history);
+			should_rebuild_pipeline = true;
+		} break;
+
+		case CMD_REDO: {
+			history_redo(history);
+			should_rebuild_pipeline = true;
+		} break;
+
+		default:
+			break;
+	}
+
+	if (should_rebuild_pipeline) {
+		bg_pipeline_build(editor_pipeline, &node_registry, history_current_copy(history));
 		should_send_audio_state = true;
 	}
 

@@ -114,6 +114,20 @@ bg_grid_put(bg_grid_t* grid, bg_pos_t pos, bg_sym_t sym) {
 	}
 }
 
+static inline void
+bg_grid_copy(bg_grid_t* dst, const bg_grid_t* src) {
+	bhash_clear(dst);
+	bhash_index_t len = bhash_len(src);
+	for (bhash_index_t i = 0; i < len; ++i) {
+		bhash_put(dst, src->keys[i], src->values[i]);
+	}
+}
+
+static inline void
+bg_grid_clear(bg_grid_t* grid) {
+	bhash_clear(grid);
+}
+
 void
 bg_node_registry_reinit(bg_node_registry_t* reg, bgame_allocator_t* allocator);
 

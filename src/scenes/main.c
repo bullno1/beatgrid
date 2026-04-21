@@ -74,6 +74,7 @@ SCENE_VAR(history_version_t, tracked_history_version)
 
 SCENE_VAR(char*, filename)
 SCENE_VAR(size_t, filename_capacity)
+SCENE_VAR(history_version_t, saved_version)
 
 SCENE_VAR(CF_Coroutine, modal_coro)
 
@@ -685,6 +686,30 @@ is_file_untitled(void) {
 	return filename == NULL || filename[0] == '\0';
 }
 
+static bool
+has_unsaved_changes(void) {
+	return saved_version != history_current_version(history);
+}
+
+static void
+set_filename(const char* name) {
+	size_t name_len = strlen(name);
+	if (name_len + 1 > filename_capacity) {
+		filename = bgame_realloc(filename, name_len + 1, scene_allocator);
+	}
+	memcpy(filename, name, name_len + 1);
+}
+
+static void
+update_window_title(void) {
+	const char* title = bgame_fmt(
+		"beatgrid - %s %s",
+		is_file_untitled() ? "untitled" : filename,
+		has_unsaved_changes() ? "*" : ""
+	);
+	cf_app_set_title(title);
+}
+
 static ufa_status_t
 do_save_document(ufa_save_file_t* save_file) {
 	ufa_status_t status = UFA_OK;
@@ -721,7 +746,7 @@ do_save_document(ufa_save_file_t* save_file) {
 }
 
 static void
-save_document_as(void* userdata) {
+save_document_as(const char* filename) {
 	barena_t arena;
 	barena_init(&arena, bgame_arena_pool);
 
@@ -731,15 +756,26 @@ save_document_as(void* userdata) {
 			.pattern = "txt",
 		},
 	};
-	ufa_save_file_t* save_file = ufa_begin_save_file(&arena, filters, CF_ARRAY_SIZE(filters));
+	ufa_save_file_t* save_file = ufa_begin_save_file((ufa_config_t){
+		.arena = &arena,
+		.filters = filters,
+		.num_filters = CF_ARRAY_SIZE(filters),
+		.filename = filename,
+	});
 
 	ufa_status_t status;
 	while ((status = ufa_check_save_file(save_file)) == UFA_PENDING) {
 		modal_wait();
 	}
 
-	if (status == UFA_OK) {
-		do_save_document(save_file);
+	if (
+		status == UFA_OK
+		&&
+		do_save_document(save_file) == UFA_OK
+	) {
+		set_filename(ufa_get_save_file_name(save_file));
+		saved_version = history_current_version(history);
+		update_window_title();
 	}
 
 	ufa_end_save_file(save_file);
@@ -747,6 +783,19 @@ save_document_as(void* userdata) {
 	barena_reset(&arena);
 }
 
+static void
+modal_action_save_as(void* userdata) {
+	save_document_as(NULL);
+}
+
+static void
+modal_action_save(void* userdata) {
+	if (is_file_untitled()) {
+		modal_action_save_as(NULL);
+	} else {
+		save_document_as(filename);
+	}
+}
 
 // }}}
 
@@ -898,7 +947,7 @@ update(void) {
 				}
 
 				if (menu_item("Save", NULL)) {
-					pending_command = is_file_untitled() ? CMD_SAVE_AS : CMD_SAVE;
+					pending_command = CMD_SAVE;
 				}
 
 				if (menu_item("Save as", NULL)) {
@@ -1216,16 +1265,21 @@ update(void) {
 	switch (pending_command) {
 		case CMD_NEW: {
 			history_clear(history);
+			if (!is_file_untitled()) {
+				filename[0] = '\0';
+			}
+			saved_version = history_current_version(history);
 		} break;
 
 		case CMD_OPEN: {
 		} break;
 
 		case CMD_SAVE: {
+			start_modal_process(dialog_modal_config, modal_action_save, NULL);
 		} break;
 
 		case CMD_SAVE_AS: {
-			start_modal_process(dialog_modal_config, save_document_as, NULL);
+			start_modal_process(dialog_modal_config, modal_action_save_as, NULL);
 		} break;
 
 		case CMD_UNDO: {
@@ -1243,7 +1297,9 @@ update(void) {
 	history_version_t history_version = history_current_version(history);
 	if (tracked_history_version != history_version) {
 		bg_pipeline_build(editor_pipeline, &node_registry, history_current_copy(history));
+		update_window_title();
 		should_send_audio_state = true;
+
 		tracked_history_version = history_version;
 	}
 

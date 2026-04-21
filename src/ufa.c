@@ -18,6 +18,17 @@ typedef struct {
 	const char* mode;
 } ufa_t;
 
+static void
+ufa_open_file(ufa_t* ufa, const char* filename) {
+	size_t len = strlen(filename);
+	char* filename_copy = barena_memalign(ufa->arena, len + 1, _Alignof(char));
+	memcpy(filename_copy, filename, len + 1);
+	ufa->filename = filename_copy;
+
+	ufa->stream = SDL_IOFromFile(filename, ufa->mode);
+	ufa->status = ufa->stream != NULL ? UFA_OK : UFA_ERROR;
+}
+
 static void SDLCALL
 ufa_file_callback(void* userdata, const char* const* filelist, int filter) {
 	ufa_t* ufa = userdata;
@@ -27,26 +38,15 @@ ufa_file_callback(void* userdata, const char* const* filelist, int filter) {
 	} else if (*filelist == NULL) {
 		ufa->status = UFA_CANCELLED;
 	} else {
-		const char* filename = *filelist;
-		size_t len = strlen(filename);
-		char* filename_copy = barena_memalign(ufa->arena, len + 1, _Alignof(char));
-		memcpy(filename_copy, filename, len + 1);
-		ufa->filename = filename_copy;
-
-		ufa->stream = SDL_IOFromFile(filename, ufa->mode);
-		ufa->status = ufa->stream != NULL ? UFA_OK : UFA_ERROR;
+		ufa_open_file(ufa, *filelist);
 	}
 }
 
 ufa_open_file_t*
-ufa_begin_open_file(
-	barena_t* arena,
-	const ufa_filter_t* filters,
-	int num_filters
-) {
-	ufa_t* ufa = barena_memalign(arena, sizeof(ufa_t), _Alignof(ufa_t));
+ufa_begin_open_file(ufa_config_t config) {
+	ufa_t* ufa = barena_memalign(config.arena, sizeof(ufa_t), _Alignof(ufa_t));
 	*ufa = (ufa_t){
-		.arena = arena,
+		.arena = config.arena,
 		.status = UFA_PENDING,
 		.mode = "r",
 	};
@@ -54,9 +54,9 @@ ufa_begin_open_file(
 	SDL_ShowOpenFileDialog(
 		ufa_file_callback, ufa,
 		cf_app_get_window(),
-		(const SDL_DialogFileFilter*)filters,
-		num_filters,
-		NULL,
+		(const SDL_DialogFileFilter*)config.filters,
+		config.num_filters,
+		config.directory,
 		false
 	);
 
@@ -101,25 +101,25 @@ ufa_end_open_file(ufa_open_file_t* open_file) {
 }
 
 ufa_save_file_t*
-ufa_begin_save_file(
-	barena_t* arena,
-	const ufa_filter_t* filters,
-	int num_filters
-) {
-	ufa_t* ufa = barena_memalign(arena, sizeof(ufa_t), _Alignof(ufa_t));
+ufa_begin_save_file(ufa_config_t config) {
+	ufa_t* ufa = barena_memalign(config.arena, sizeof(ufa_t), _Alignof(ufa_t));
 	*ufa = (ufa_t){
-		.arena = arena,
+		.arena = config.arena,
 		.status = UFA_PENDING,
 		.mode = "w",
 	};
 
-	SDL_ShowSaveFileDialog(
-		ufa_file_callback, ufa,
-		cf_app_get_window(),
-		(const SDL_DialogFileFilter*)filters,
-		num_filters,
-		NULL
-	);
+	if (config.filename != NULL) {
+		ufa_open_file(ufa, config.filename);
+	} else {
+		SDL_ShowSaveFileDialog(
+			ufa_file_callback, ufa,
+			cf_app_get_window(),
+			(const SDL_DialogFileFilter*)config.filters,
+			config.num_filters,
+			config.directory
+		);
+	}
 
 	return (ufa_save_file_t*)ufa;
 }

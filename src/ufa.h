@@ -21,12 +21,17 @@ typedef struct {
 	const char* pattern;
 } ufa_filter_t;
 
+typedef struct {
+	barena_t* arena;
+	const ufa_filter_t* filters;
+	int num_filters;
+
+	const char* filename;
+	const char* directory;
+} ufa_config_t;
+
 ufa_open_file_t*
-ufa_begin_open_file(
-	barena_t* arena,
-	const ufa_filter_t* filters,
-	int num_filters
-);
+ufa_begin_open_file(ufa_config_t config);
 
 ufa_status_t
 ufa_check_open_file(ufa_open_file_t* open_file);
@@ -44,11 +49,7 @@ void
 ufa_end_open_file(ufa_open_file_t* open_file);
 
 ufa_save_file_t*
-ufa_begin_save_file(
-	barena_t* arena,
-	const ufa_filter_t* filters,
-	int num_filters
-);
+ufa_begin_save_file(ufa_config_t config);
 
 ufa_status_t
 ufa_check_save_file(ufa_save_file_t* save_file);

@@ -14,6 +14,7 @@
 #include "../assets.h"
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_mouse.h>
+#include <SDL3/SDL_filesystem.h>
 #include "../grid.h"
 #include "../audio_callback.h"
 #include "../history.h"
@@ -72,8 +73,8 @@ SCENE_VAR(cursor_map_t, cursor_map)
 SCENE_VAR(history_t*, history)
 SCENE_VAR(history_version_t, tracked_history_version)
 
-SCENE_VAR(char*, filename)
-SCENE_VAR(size_t, filename_capacity)
+SCENE_VAR(char*, current_filename)
+SCENE_VAR(size_t, current_filename_capacity)
 SCENE_VAR(history_version_t, saved_version)
 
 SCENE_VAR(CF_Coroutine, modal_coro)
@@ -228,9 +229,9 @@ cleanup(void) {
 		modal_coro.id = 0;
 	}
 
-	bgame_free(filename, scene_allocator);
-	filename = NULL;
-	filename_capacity = 0;
+	bgame_free(current_filename, scene_allocator);
+	current_filename = NULL;
+	current_filename_capacity = 0;
 }
 
 static void
@@ -683,7 +684,7 @@ grid_element(const Clay_RenderCommand* command, void* userdata) {
 
 static bool
 is_file_untitled(void) {
-	return filename == NULL || filename[0] == '\0';
+	return current_filename == NULL || current_filename[0] == '\0';
 }
 
 static bool
@@ -694,17 +695,17 @@ has_unsaved_changes(void) {
 static void
 set_filename(const char* name) {
 	size_t name_len = strlen(name);
-	if (name_len + 1 > filename_capacity) {
-		filename = bgame_realloc(filename, name_len + 1, scene_allocator);
+	if (name_len + 1 > current_filename_capacity) {
+		current_filename = bgame_realloc(current_filename, name_len + 1, scene_allocator);
 	}
-	memcpy(filename, name, name_len + 1);
+	memcpy(current_filename, name, name_len + 1);
 }
 
 static void
 update_window_title(void) {
 	const char* title = bgame_fmt(
 		"beatgrid - %s %s",
-		is_file_untitled() ? "untitled" : filename,
+		is_file_untitled() ? "untitled" : current_filename,
 		has_unsaved_changes() ? "*" : ""
 	);
 	cf_app_set_title(title);
@@ -746,7 +747,7 @@ do_save_document(ufa_save_file_t* save_file) {
 }
 
 static void
-save_document_as(const char* filename) {
+save_document_as(const char* filename_hint) {
 	barena_t arena;
 	barena_init(&arena, bgame_arena_pool);
 
@@ -756,11 +757,28 @@ save_document_as(const char* filename) {
 			.pattern = "txt",
 		},
 	};
+
+	const char* directory = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+	if (!is_file_untitled()) {
+		int dir_len = (int)strlen(current_filename) - 1;
+		for (; dir_len >= 0; --dir_len) {
+			char path_ch = current_filename[dir_len];
+			if (path_ch == '/' || path_ch == '\\') {
+				break;
+			}
+		}
+
+		if (dir_len > 0) {
+			directory = bgame_fmt("%.*s", dir_len, current_filename);
+		}
+	}
+
 	ufa_save_file_t* save_file = ufa_begin_save_file((ufa_config_t){
 		.arena = &arena,
 		.filters = filters,
 		.num_filters = CF_ARRAY_SIZE(filters),
-		.filename = filename,
+		.filename = filename_hint,
+		.directory = directory,
 	});
 
 	ufa_status_t status;
@@ -793,7 +811,7 @@ modal_action_save(void* userdata) {
 	if (is_file_untitled()) {
 		modal_action_save_as(NULL);
 	} else {
-		save_document_as(filename);
+		save_document_as(current_filename);
 	}
 }
 
@@ -1266,7 +1284,7 @@ update(void) {
 		case CMD_NEW: {
 			history_clear(history);
 			if (!is_file_untitled()) {
-				filename[0] = '\0';
+				current_filename[0] = '\0';
 			}
 			saved_version = history_current_version(history);
 		} break;

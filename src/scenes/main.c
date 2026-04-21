@@ -68,6 +68,7 @@ typedef BHASH_TABLE(uint32_t, SDL_Cursor*) cursor_map_t;
 SCENE_VAR(cursor_map_t, cursor_map)
 
 SCENE_VAR(history_t*, history)
+SCENE_VAR(history_version_t, tracked_history_version)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
 
@@ -617,7 +618,6 @@ update(void) {
 
 	cf_app_update(fixed_update);
 
-	bool should_rebuild_pipeline = false;
 	bool should_send_audio_state = false;
 	editor_command_t pending_command = CMD_NONE;
 
@@ -662,7 +662,6 @@ update(void) {
 		EDIT_GRID(history, grid) {
 			bg_grid_del(grid, cursor_pos);
 		}
-		should_rebuild_pipeline = true;
 	}
 
 	if (cf_input_text_has_data()) {
@@ -673,7 +672,6 @@ update(void) {
 			EDIT_GRID(history, grid) {
 				bg_grid_put(grid, cursor_pos, (bg_sym_t)codepoint);
 			}
-			should_rebuild_pipeline = true;
 		}
 	}
 	// }}}
@@ -1065,26 +1063,25 @@ update(void) {
 	switch (pending_command) {
 		case CMD_NEW: {
 			history_clear(history);
-			should_rebuild_pipeline = true;
 		} break;
 
 		case CMD_UNDO: {
 			history_undo(history);
-			should_rebuild_pipeline = true;
 		} break;
 
 		case CMD_REDO: {
 			history_redo(history);
-			should_rebuild_pipeline = true;
 		} break;
 
 		default:
 			break;
 	}
 
-	if (should_rebuild_pipeline) {
+	history_version_t history_version = history_current_version(history);
+	if (tracked_history_version != history_version) {
 		bg_pipeline_build(editor_pipeline, &node_registry, history_current_copy(history));
 		should_send_audio_state = true;
+		tracked_history_version = history_version;
 	}
 
 	if (should_send_audio_state) {

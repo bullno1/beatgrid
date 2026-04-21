@@ -508,6 +508,21 @@ menu_item(const char* name, const char* shortcut) {
 
 	Clay__OpenTextElement(label, menu_bar_ctx.config.text_config);
 
+	if (shortcut != NULL) {
+		bgame_ui_hspacer(CLAY_ID_LOCAL("Spacer"));
+
+		CLAY(CLAY_ID_LOCAL("Shortcut"), {
+			.layout.padding.left = 20,
+		}) {
+			Clay_TextElementConfig text_config = menu_bar_ctx.config.text_config;
+			text_config.textColor.a *= 0.7f;
+			Clay__OpenTextElement(
+				(Clay_String){ .chars = shortcut, .length = strlen(shortcut) },
+				text_config
+			);
+		}
+	}
+
 	bool clicked = hovered && cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT);
 	Clay__CloseElement();
 
@@ -1055,6 +1070,28 @@ update(void) {
 	if (cf_key_just_pressed(CF_KEY_F12)) {
 		Clay_SetDebugModeEnabled(!Clay_IsDebugModeEnabled());
 	}
+
+	if (cf_key_down(CF_KEY_LCTRL) || cf_key_down(CF_KEY_RCTRL)) {
+		if (cf_key_just_pressed(CF_KEY_N)) {
+			pending_command = CMD_NEW;
+		}
+
+		if (cf_key_just_pressed(CF_KEY_O)) {
+			pending_command = CMD_OPEN;
+		}
+
+		if (cf_key_just_pressed(CF_KEY_S)) {
+			pending_command = cf_key_down(CF_KEY_LSHIFT) || cf_key_down(CF_KEY_RSHIFT) ? CMD_SAVE_AS : CMD_SAVE;
+		}
+
+		if (cf_key_just_pressed(CF_KEY_Z)) {
+			pending_command = CMD_UNDO;
+		}
+
+		if (cf_key_just_pressed(CF_KEY_Y)) {
+			pending_command = CMD_REDO;
+		}
+	}
 	// }}}
 
 	// }}}
@@ -1106,7 +1143,6 @@ update(void) {
 					.layout.padding = { .left = 5, .right = 5, .top = 5, .bottom = 5 },
 					.border = {
 						.color = UI_BORDER_COLOR,
-						.width = { .betweenChildren = 1 },
 					},
 					.backgroundColor = UI_BACKGROUND_COLOR,
 					.transition = transition_common,
@@ -1121,33 +1157,33 @@ update(void) {
 			});
 
 			if (menu_begin("FILE")) {
-				if (menu_item("New", NULL)) {
+				if (menu_item("New...", "Ctrl+N")) {
 					pending_command = CMD_NEW;
 				}
 
-				if (menu_item("Open", NULL)) {
+				if (menu_item("Open...", "Ctrl+O")) {
 					pending_command = CMD_OPEN;
 				}
 
-				if (menu_item("Save", NULL)) {
+				if (menu_item("Save", "Ctrl+S")) {
 					pending_command = CMD_SAVE;
 				}
 
-				if (menu_item("Save as", NULL)) {
+				if (menu_item("Save as...", "Ctrl+Shift+S")) {
 					pending_command = CMD_SAVE_AS;
 				}
 
-				if (menu_item("Exit", NULL)) {
+				if (menu_item("Exit", "Alt+F4")) {
 				}
 			}
 			menu_end();
 
 			if (menu_begin("EDIT")) {
-				if (menu_item("Undo", NULL)) {
+				if (menu_item("Undo", "Ctrl+Z")) {
 					pending_command = CMD_UNDO;
 				}
 
-				if (menu_item("Redo", NULL)) {
+				if (menu_item("Redo", "Ctrl+Y")) {
 					pending_command = CMD_REDO;
 				}
 
@@ -1157,7 +1193,7 @@ update(void) {
 			menu_end();
 
 			if (menu_begin("HELP")) {
-				if (menu_item("How to use", NULL)) {
+				if (menu_item("Manual", "F1")) {
 				}
 				if (menu_item("About", NULL)) {
 				}
@@ -1447,6 +1483,9 @@ update(void) {
 
 	switch (pending_command) {
 		case CMD_NEW: {
+			playing = false;
+			should_send_audio_state = true;
+
 			EDIT_GRID(history, grid) {
 				bg_grid_clear(grid);
 			}
@@ -1458,6 +1497,9 @@ update(void) {
 		} break;
 
 		case CMD_OPEN: {
+			playing = false;
+			should_send_audio_state = true;
+
 			start_modal_process(dialog_modal_config, modal_action_open, NULL);
 		} break;
 

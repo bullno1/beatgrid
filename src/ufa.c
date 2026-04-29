@@ -1,6 +1,9 @@
+// vim: set foldmethod=marker foldlevel=0:
 #include "ufa.h"
 
 #ifndef __EMSCRIPTEN__
+
+// Common {{{
 
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_iostream.h>
@@ -64,6 +67,10 @@ ufa_file_callback(void* userdata, const char* const* filelist, int filter) {
 	}
 }
 
+// }}}
+
+// Open {{{
+
 ufa_open_file_t*
 ufa_begin_open_file(ufa_config_t config) {
 	ufa_t* ufa = barena_memalign(config.arena, sizeof(ufa_t), _Alignof(ufa_t));
@@ -122,6 +129,10 @@ ufa_end_open_file(ufa_open_file_t* open_file) {
 		ufa->stream = NULL;
 	}
 }
+
+// }}}
+
+// Save {{{
 
 ufa_save_file_t*
 ufa_begin_save_file(ufa_config_t config) {
@@ -185,6 +196,171 @@ ufa_end_save_file(ufa_save_file_t* save_file) {
 	}
 }
 
+// }}}
+
 #else
+
+// Common {{{
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+#include <emscripten/em_macros.h>
+
+EMSCRIPTEN_KEEPALIVE void*
+ufa_web_malloc(void* alloc_ctx, size_t size) {
+	return barena_malloc(alloc_ctx, size);
+}
+
+// }}}
+
+// Open {{{
+
+struct ufa_open_file_s {
+	const char* filename;
+	uint8_t status;
+	int handle;
+};
+
+extern int
+ufa_web_begin_open_file(
+	const char* filter,
+	void* alloc_ctx,
+	const char** filename_ptr,
+	uint8_t* status_ptr
+);
+
+extern void
+ufa_web_end_open_file(int handle);
+
+extern int
+ufa_web_read_open_file(int handle, void* buf, size_t* size);
+
+ufa_open_file_t*
+ufa_begin_open_file(ufa_config_t config) {
+	ufa_open_file_t* ufa = barena_memalign(config.arena, sizeof(ufa_open_file_t), _Alignof(ufa_open_file_t));
+	*ufa = (ufa_open_file_t){
+		.status = UFA_PENDING,
+	};
+
+	int len = 0;
+	bool is_first = true;
+	for (int i = 0; i < config.num_filters; ++i) {
+		if (strcmp(config.filters[i].pattern, "*") == 0) { continue; }
+
+		len += snprintf(NULL, 0, "%s.%s", is_first ? "" : ",", config.filters[i].pattern);
+		is_first = false;
+	}
+
+	size_t buf_size = len + 1;
+	char* filter = barena_memalign(config.arena, buf_size, _Alignof(char));
+	char* buf_itr = filter;
+	is_first = true;
+	for (int i = 0; i < config.num_filters; ++i) {
+		if (strcmp(config.filters[i].pattern, "*") == 0) { continue; }
+
+		int part_len = snprintf(buf_itr, buf_size, "%s.%s", is_first ? "" : ",", config.filters[i].pattern);
+		buf_size -= part_len;
+		buf_itr += part_len;
+		is_first = false;
+	}
+
+	ufa->handle = ufa_web_begin_open_file(filter, config.arena, &ufa->filename, &ufa->status);
+
+	return ufa;
+}
+
+ufa_status_t
+ufa_check_open_file(ufa_open_file_t* open_file) {
+	return open_file->status;
+}
+
+const char*
+ufa_get_open_file_error(ufa_open_file_t* open_file) {
+	return NULL;
+}
+
+const char*
+ufa_get_open_file_name(ufa_open_file_t* open_file) {
+	return open_file->filename;
+}
+
+ufa_status_t
+ufa_read_open_file(ufa_open_file_t* open_file, void* buf, size_t* size) {
+	return ufa_web_read_open_file(open_file->handle, buf, size);
+}
+
+void
+ufa_end_open_file(ufa_open_file_t* open_file) {
+	ufa_web_end_open_file(open_file->handle);
+}
+
+// }}}
+
+// Save {{{
+
+struct ufa_save_file_s {
+	const char* filename;
+	uint8_t status;
+	int handle;
+};
+
+extern int
+ufa_web_begin_save_file(const char* filename);
+
+extern int
+ufa_web_write_save_file(int handle, const void* buf, size_t* size);
+
+extern void
+ufa_web_end_save_file(int handle);
+
+ufa_save_file_t*
+ufa_begin_save_file(ufa_config_t config) {
+	ufa_save_file_t* ufa = barena_memalign(config.arena, sizeof(ufa_save_file_t), _Alignof(ufa_save_file_t));
+	*ufa = (ufa_save_file_t){
+		.status = UFA_OK,
+		.filename = config.filename,
+	};
+
+	if (ufa->filename == NULL) {
+		int size = snprintf(NULL, 0, "grid.%s", config.filters[0].pattern);
+		char* filename = barena_memalign(config.arena, size + 1, _Alignof(char));
+		snprintf(filename, size + 1, "grid.%s", config.filters[0].pattern);
+
+		ufa->filename = filename;
+	}
+
+	ufa->handle = ufa_web_begin_save_file(ufa->filename);
+
+	return ufa;
+}
+
+ufa_status_t
+ufa_check_save_file(ufa_save_file_t* save_file) {
+	return save_file->status;
+}
+
+const char*
+ufa_get_save_file_error(ufa_save_file_t* save_file) {
+	return NULL;
+}
+
+const char*
+ufa_get_save_file_name(ufa_save_file_t* save_file) {
+	return save_file->filename;
+}
+
+ufa_status_t
+ufa_write_save_file(ufa_save_file_t* save_file, const void* buf, size_t* size) {
+	return ufa_web_write_save_file(save_file->handle, buf, size);
+}
+
+void
+ufa_end_save_file(ufa_save_file_t* save_file) {
+	ufa_web_end_save_file(save_file->handle);
+}
+
+// }}}
 
 #endif

@@ -25,6 +25,7 @@ if (EMSCRIPTEN)
 
 	target_link_libraries(beatgrid PRIVATE beatgrid-emscripten-shell)
 	target_link_options(beatgrid PRIVATE
+		"--js-library=${CMAKE_CURRENT_LIST_DIR}/ufa.js"
 		-sMALLOC=emmalloc
 		-gseparate-dwarf
 		--preload-file "${CMAKE_CURRENT_LIST_DIR}/../assets@/assets"

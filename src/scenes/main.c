@@ -79,8 +79,6 @@ SCENE_VAR(char*, current_filename)
 SCENE_VAR(size_t, current_filename_capacity)
 SCENE_VAR(history_version_t, saved_version)
 
-SCENE_VAR(CF_Coroutine, modal_coro)
-
 SCENE_VAR(CF_V2, grid_offset)
 
 BGAME_DECLARE_SCENE_ALLOCATOR(main)
@@ -230,11 +228,6 @@ cleanup(void) {
 	SDL_DestroyCursor(cur_move);
 	bhash_cleanup(&cursor_map);
 
-	if (modal_coro.id != 0) {
-		cf_destroy_coroutine(modal_coro);
-		modal_coro.id = 0;
-	}
-
 	bgame_free(current_filename, scene_allocator);
 	current_filename = NULL;
 	current_filename_capacity = 0;
@@ -277,48 +270,10 @@ fade_in(Clay_TransitionData targetState, Clay_TransitionProperty properties) {
 
 // UI {{{
 
-// Mouse cursor {{{
-
-void
-set_element_mouse_cursor(uint32_t id, SDL_Cursor* cursor) {
-	bhash_put(&cursor_map, id, cursor);
-}
-
-void
-set_modal_cursor(SDL_Cursor* cursor) {
-	modal_cursor = cursor;
-}
-
-void
-update_mouse_cursor(void) {
-	if (modal_coro.id != 0 && modal_cursor != NULL) {
-		SDL_SetCursor(modal_cursor);
-	} else {
-		Clay_ElementIdArray elements = Clay_GetPointerOverIds();
-		if (elements.length > 0) {
-			bool found = false;
-			for (int i = 0; i < elements.length; ++i) {
-				uint32_t id = elements.internalArray[i].id;
-				SDL_Cursor** cursor_ptr = bhash_get_value(&cursor_map, id);
-
-				if (cursor_ptr != NULL) {
-					SDL_SetCursor(*cursor_ptr);
-					found = true;
-					break;
-				}
-			}
-			if (!found) {
-				SDL_SetCursor(cur_default);
-			}
-		}
-
-		bhash_clear(&cursor_map);
-	}
-}
-
-// }}}
-
 // Modal {{{
+
+#define modal_loop(COND) \
+	while (modal_tick() && (COND))
 
 typedef struct {
 	Clay_Color color;
@@ -327,8 +282,10 @@ typedef struct {
 
 typedef struct {
 	modal_config_t config;
+	CF_Coroutine coro;
 	bool modal_requested;
 	bool clicked;
+	bool should_run;
 } modal_ctx_t;
 
 typedef void (*modal_entry_fn_t)(void* userdata);
@@ -354,18 +311,20 @@ end_modal(void) {
 }
 
 static void
+set_modal_cursor(SDL_Cursor* cursor);
+
+static void
 modal_process_wrapper(CF_Coroutine coro) {
 	modal_coro_ctx_t ctx = *(modal_coro_ctx_t*)cf_coroutine_get_udata(coro);
 
-	bgame_block_reload();
+	modal_ctx.should_run = true;
 	ctx.entry(ctx.userdata);
-	bgame_unblock_reload();
 	set_modal_cursor(NULL);
 }
 
 static void
 start_modal_process(modal_config_t config, modal_entry_fn_t fn, void* userdata) {
-	if (modal_coro.id != 0) { return; }
+	if (modal_ctx.coro.id != 0) { return; }
 
 	modal_ctx.config = config;
 
@@ -373,8 +332,8 @@ start_modal_process(modal_config_t config, modal_entry_fn_t fn, void* userdata) 
 		.entry = fn,
 		.userdata = userdata,
 	};
-	modal_coro = cf_make_coroutine(modal_process_wrapper, 0, &ctx);
-	cf_coroutine_resume(modal_coro);  // Let it copy the userdata before it goes out of scope
+	modal_ctx.coro = cf_make_coroutine(modal_process_wrapper, 0, &ctx);
+	cf_coroutine_resume(modal_ctx.coro);  // Let it copy the userdata before it goes out of scope
 }
 
 static void
@@ -382,14 +341,66 @@ modal_wait(void) {
 	cf_coroutine_yield(cf_coroutine_currently_running());
 }
 
+static bool
+modal_should_run(void) {
+	return modal_ctx.should_run;
+}
+
+static bool
+modal_tick(void) {
+	modal_wait();
+	return modal_should_run();
+}
+
 static void
 modal_execute(void) {
-	if (modal_coro.id == 0) { return; }
+	if (modal_ctx.coro.id == 0) { return; }
 
-	cf_coroutine_resume(modal_coro);
-	if (cf_coroutine_state(modal_coro) == CF_COROUTINE_STATE_DEAD) {
-		cf_destroy_coroutine(modal_coro);
-		modal_coro.id = 0;
+	cf_coroutine_resume(modal_ctx.coro);
+	if (cf_coroutine_state(modal_ctx.coro) == CF_COROUTINE_STATE_DEAD) {
+		cf_destroy_coroutine(modal_ctx.coro);
+		modal_ctx.coro.id = 0;
+	}
+}
+
+// }}}
+
+// Mouse cursor {{{
+
+static void
+set_element_mouse_cursor(uint32_t id, SDL_Cursor* cursor) {
+	bhash_put(&cursor_map, id, cursor);
+}
+
+static void
+set_modal_cursor(SDL_Cursor* cursor) {
+	modal_cursor = cursor;
+}
+
+static void
+update_mouse_cursor(void) {
+	if (modal_ctx.coro.id != 0 && modal_cursor != NULL) {
+		SDL_SetCursor(modal_cursor);
+	} else {
+		Clay_ElementIdArray elements = Clay_GetPointerOverIds();
+		if (elements.length > 0) {
+			bool found = false;
+			for (int i = 0; i < elements.length; ++i) {
+				uint32_t id = elements.internalArray[i].id;
+				SDL_Cursor** cursor_ptr = bhash_get_value(&cursor_map, id);
+
+				if (cursor_ptr != NULL) {
+					SDL_SetCursor(*cursor_ptr);
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				SDL_SetCursor(cur_default);
+			}
+		}
+
+		bhash_clear(&cursor_map);
 	}
 }
 
@@ -442,7 +453,7 @@ menu_begin(const char* name) {
 
 	Clay__OpenTextElement(label, menu_bar_ctx.config.text_config);
 
-	if (hovered && modal_coro.id == 0) {
+	if (hovered && modal_ctx.coro.id == 0) {
 		if (cf_mouse_just_pressed(CF_MOUSE_BUTTON_LEFT)) {
 			if (own_id == menu_bar_ctx.focused_menu) {
 				menu_bar_ctx.focused_menu = 0;
@@ -567,11 +578,9 @@ grid_drag(void* userdata) {
 	float original_mouse_y = cf_mouse_y();
 	CF_V2 original_offset = grid_offset;
 
-	while (cf_mouse_down(CF_MOUSE_BUTTON_MIDDLE)) {
+	modal_loop(cf_mouse_down(CF_MOUSE_BUTTON_MIDDLE)) {
 		grid_offset.x = original_offset.x + cf_mouse_x() - original_mouse_x;
 		grid_offset.y = original_offset.y + cf_mouse_y() - original_mouse_y;
-
-		modal_wait();
 	}
 }
 
@@ -801,7 +810,7 @@ do_save_document(ufa_save_file_t* save_file) {
 	return status;
 }
 
-static void
+static ufa_status_t
 save_document_as(const char* filename_hint) {
 	barena_t arena;
 	barena_init(&arena, bgame_arena_pool);
@@ -836,18 +845,16 @@ save_document_as(const char* filename_hint) {
 		.directory = directory,
 	});
 
-	ufa_status_t status;
-	while ((status = ufa_check_save_file(save_file)) == UFA_PENDING) {
+	ufa_status_t status = UFA_CANCELLED;
+	modal_loop((status = ufa_check_save_file(save_file)) == UFA_PENDING) {
 		begin_modal((modal_config_t){ 0 });
 		end_modal();
-
-		modal_wait();
 	}
 
 	if (
 		status == UFA_OK
 		&&
-		do_save_document(save_file) == UFA_OK
+		(status = do_save_document(save_file)) == UFA_OK
 	) {
 		set_filename(ufa_get_save_file_name(save_file));
 		saved_version = history_current_version(history);
@@ -857,6 +864,8 @@ save_document_as(const char* filename_hint) {
 	ufa_end_save_file(save_file);
 
 	barena_reset(&arena);
+
+	return status;
 }
 
 static ufa_status_t
@@ -920,8 +929,80 @@ do_open_document(ufa_open_file_t* open_file) {
 	return status;
 }
 
+static int
+modal_prompt(const char* question, const char* choices[], int num_choices) {
+	int choice = 0;
+
+	modal_loop(true) {
+		begin_modal((modal_config_t){ 0 });
+
+		CLAY(CLAY_ID("Prompt"), {
+			.layout = {
+				.layoutDirection = CLAY_TOP_TO_BOTTOM,
+			},
+			.floating = {
+				.attachPoints = {
+					.element = CLAY_ATTACH_POINT_CENTER_CENTER,
+					.parent = CLAY_ATTACH_POINT_CENTER_CENTER,
+				},
+				.attachTo = CLAY_ATTACH_TO_ELEMENT_WITH_ID,
+				.parentId = CLAY_ID("Mid").id,
+				.zIndex = 1,
+			},
+		}) {
+			CLAY(CLAY_ID_LOCAL("Title"), {
+			}) {
+				CLAY_TEXT(((Clay_String){
+					.chars = question,
+					.length = strlen(question),
+				}), {
+					.fontId = FONT_CHROME,
+					.fontSize = 16,
+					.textColor = bgame_ui_color_rgb(0, 255, 65),
+					.userData = bgame_ui_text_config((bgame_ui_text_config_t){
+						.effect = BGAME_UI_DISABLE_TEXT_EFFECT,
+					})
+				});
+			}
+		}
+
+		if (end_modal()) {
+			break;
+		}
+	}
+
+	return choice;
+}
+
+static bool
+maybe_save_first(void) {
+	if (!has_unsaved_changes()) { return true; }
+
+	const char* choices[] = {
+		"Save",
+		"Don't save",
+		"Cancel",
+	};
+
+	int choice = modal_prompt("There are unsaved changes. Do you want to save first?", choices, CF_ARRAY_SIZE(choices));
+
+	if (choice == 0) {  // Save
+		if (is_file_untitled()) {
+			return save_document_as(NULL) == UFA_OK;
+		} else {
+			return save_document_as(current_filename) == UFA_OK;
+		}
+	} else if (choice == 1) {  // Don't save
+		return true;
+	} else {
+		return false;  // Cancel
+	}
+}
+
 static void
 modal_action_open(void* userdata) {
+	if (!maybe_save_first()) { return; }
+
 	barena_t arena;
 	barena_init(&arena, bgame_arena_pool);
 
@@ -958,12 +1039,10 @@ modal_action_open(void* userdata) {
 		.directory = directory,
 	});
 
-	ufa_status_t status;
-	while ((status = ufa_check_open_file(open_file)) == UFA_PENDING) {
+	ufa_status_t status = UFA_CANCELLED;
+	modal_loop((status = ufa_check_open_file(open_file)) == UFA_PENDING) {
 		begin_modal((modal_config_t){ 0 });
 		end_modal();
-
-		modal_wait();
 	}
 
 	if (
@@ -993,6 +1072,20 @@ modal_action_save(void* userdata) {
 	} else {
 		save_document_as(current_filename);
 	}
+}
+
+static void
+modal_action_new(void* userdata) {
+	if (!maybe_save_first()) { return; }
+
+	EDIT_GRID(history, grid) {
+		bg_grid_clear(grid);
+	}
+	history_clear(history);
+	if (!is_file_untitled()) {
+		current_filename[0] = '\0';
+	}
+	saved_version = history_current_version(history);
 }
 
 // }}}
@@ -1444,12 +1537,11 @@ update(void) {
 				});
 			}
 		}
+		// }}}
 	}
-	// }}}
 
 	// Modal
 	modal_execute();
-
 	if (modal_ctx.modal_requested) {
 		CLAY(CLAY_ID("Modal"), {
 			.layout.sizing = { CLAY_SIZING_GROW(), CLAY_SIZING_GROW() },
@@ -1486,14 +1578,7 @@ update(void) {
 			playing = false;
 			should_send_audio_state = true;
 
-			EDIT_GRID(history, grid) {
-				bg_grid_clear(grid);
-			}
-			history_clear(history);
-			if (!is_file_untitled()) {
-				current_filename[0] = '\0';
-			}
-			saved_version = history_current_version(history);
+			start_modal_process(dialog_modal_config, modal_action_new, NULL);
 		} break;
 
 		case CMD_OPEN: {
